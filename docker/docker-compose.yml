@@ -1,0 +1,46 @@
+version: "3"
+services:
+  elcashd:
+    build:
+       context: ./elcashd
+       dockerfile: Dockerfile
+       args:
+          DEPLOY_USER: ElCashDeployUser
+          DEPLOY_TOKEN: ElCashDeployToken
+    volumes:
+      - /s/elcashd/blocks:/elcash/blocks/
+      - /s/elcashd/chainstate:/elcash/chainstate/
+    ports:
+      - "8333:8333"
+    expose:
+      - "8332"
+      
+  mongo:
+    build: ./mongo
+    container_name: mongo
+    restart: always
+    depends_on:
+      - elcashd
+    expose:
+      - 27017
+      - 28017
+    volumes:
+      - "/var/lib/mongodb:/data/db"
+      - "/var/backups/mongodb:/var/backups/mongodb"
+
+  flask:
+    build: ./flask
+    container_name: flask
+    restart: always
+    depends_on:
+      - mongo
+    expose:
+      - 5000
+ 
+  nginx:
+    build: ./nginx
+    container_name: nginx
+    restart: always
+    ports:
+      - "80:8080"
+

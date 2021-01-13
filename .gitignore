@@ -1,0 +1,9 @@
+*.json
+venv
+__pycache__
+.idea
+docker/flask/*.py
+docker/bitcoind/*.py
+docker/mongo/*.py
+docker/nginx/*.py
+.pydevproject.bak
