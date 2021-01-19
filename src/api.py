@@ -1,5 +1,5 @@
-from blockchain_analyzer import BlockchainAnalyzer
-from db import drop_db, get_addresses, get_blockchain, get_db_uri, get_utxos
+from blockchain.blockchain_analyzer import BlockchainAnalyzer
+from db.db import drop_db, get_addresses, get_blockchain, get_db_uri, get_utxos
 from flask import Flask, jsonify, request
 from flask_mongoengine import MongoEngine
 
