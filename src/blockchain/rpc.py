@@ -1,8 +1,11 @@
-import requests
-import json
-import random
+import json, os, random, requests
 
-url = "http://user:password@elcashd:8332"
+rpc_user = os.getenv('RPC_USER', 'user')
+rpc_pass = os.getenv('RPC_PASSWORD', 'password')
+rpc_host = os.getenv('RPC_HOST', 'elcashd')
+rpc_port = os.getenv('RPC_PORT', '8332')
+
+url = 'http://' + rpc_user + ':' + rpc_pass + '@' + rpc_host + ':' + rpc_port
 
 def get_block_hash(block_number):
     rpc = RPC("getblockhash", [block_number])
