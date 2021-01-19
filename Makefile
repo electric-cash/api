@@ -1,52 +1,31 @@
-.PHONY: linux-builder linux-build linux-appimage-builder linux-appimage-build wine-builder wine-build
+.PHONY: build exec run
 
-PROJECT=electric-cash
-NODE_IMG_PROJECT?=$(PROJECT)-electrumx
+IMG?=elcash-api:local
+ENVS?=-e RPC_HOST=127.0.0.1 \
+	  -e RPC_USER=user \
+	  -e RPC_PASSWORD=pass \
+	  -e DB_URL=mongodbURL \
+	  -e DB_NAME=mongoDBname \
+	  -e DB_PORT=mongoDBport
 
+build:
+	docker build -t $(IMG) .
 
-NODE_LINUX_SDIST_BUILDER?=$(NODE_IMG_PROJECT)-linux-sdist
-NODE_LINUX_APPIMAGE_BUILDER?=$(NODE_IMG_PROJECT)-linux-appimage
-NODE_WINE_BUILDER?=$(NODE_IMG_PROJECT)-linux-appimage
+run:
+	@docker run --rm -it \
+    -v "$(PWD)/src:/app" $(IMG)
 
+run-daemon:
+	@docker run --rm -it $(ENVS) \
+    -v "$(PWD)/src:/app" $(IMG) python3 daemon.py
 
-NODE_LINUX_SDIST_BUILDER_CMD=docker run -it \
-   -v "$(PWD):/opt/electrum" \
-   --rm \
-   --workdir /opt/electrum/contrib/build-linux/sdist \
-   $(NODE_LINUX_SDIST_BUILDER)
-
-NODE_LINUX_APPIMAGE_BUILDER_CMD=docker run -it \
-   -v "$(PWD):/opt/electrum" \
-   --rm \
-   --workdir /opt/electrum/contrib/build-linux/appimage \
-   $(NODE_LINUX_SDIST_BUILDER)
-
-NODE_WINE_BUILDER_CMD=docker run -it \
-   -v "$(PWD):/opt/wine64/drive_c/electrum" \
-   --rm \
-   --workdir /opt/wine64/drive_c/electrum/contrib/build-wine \
-   $(NODE_WINE_BUILDER)
+run-api:
+	@docker run --rm -it $(ENVS) \
+	-p 5000:5000 \
+    -v "$(PWD)/src:/app" $(IMG) gunicorn -w 3 --bind 0.0.0.0:5000 api:app
 
 
-linux-builder:
-	@docker build -t $(NODE_LINUX_SDIST_BUILDER) contrib/build-linux/sdist
-
-linux-build:
-	@$(NODE_LINUX_SDIST_BUILDER_CMD) ./build.sh
-
-
-
-linux-appimage-builder:
-	@docker build -t $(NODE_LINUX_SDIST_BUILDER) contrib/build-linux/appimage
-
-linux-appimage-build:
-	@$(NODE_LINUX_APPIMAGE_BUILDER_CMD) ./build.sh
-
-
-
-wine-builder:
-	@docker build -t $(NODE_WINE_BUILDER) contrib/build-linux/appimage
-
-wine-build:
-	@$(NODE_WINE_BUILDER_CMD) ./build.sh
-
+exec:
+	@docker run --rm -it $(ENVS) \
+	--entrypoint /bin/bash \
+    -v "$(PWD)/src:/app" $(IMG)

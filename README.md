@@ -80,3 +80,21 @@ url = "http://user:password@elcashd:8332"
 
 # Build and deployment using docker-compose
 For convenience `run.sh` script was added. It does all necessary steps for building and setting whole environment.
+@TODO: update documentation for local development
+
+### env variables
+
+| name | default value | notes |
+|------|-------|-------|
+| `DB_PROTOCOL` | `mongodb` | 
+| `DB_NAME` | `blockchain` | 
+| `DB_URL` | `mongo` | 
+| `DB_PORT` | `27017` | 
+| `DB_USERNAME` | `` | 
+| `DB_PASSWORD` | `` | 
+| `DB_AUTHSOURCE` | `` | 
+|  |  | 
+| `RPC_USER` | `user` | 
+| `RPC_PASSWORD` | `password` | 
+| `RPC_HOST` | `elcashd` | 
+| `RPC_PORT` | `8332` | 

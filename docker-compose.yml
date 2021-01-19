@@ -1,46 +1,48 @@
 version: "3"
 services:
-  elcashd:
-    build:
-       context: ./elcashd
-       dockerfile: Dockerfile
-       args:
-          DEPLOY_USER: ElCashDeployUser
-          DEPLOY_TOKEN: ElCashDeployToken
-    volumes:
-      - /s/elcashd/blocks:/elcash/blocks/
-      - /s/elcashd/chainstate:/elcash/chainstate/
-    ports:
-      - "8333:8333"
-    expose:
-      - "8332"
-      
-  mongo:
-    build: ./mongo
-    container_name: mongo
-    restart: always
-    depends_on:
-      - elcashd
+  mongodb:
+    image: mongo:4.2
+    command: mongod --smallfiles --logpath=/dev/null
     expose:
       - 27017
-      - 28017
-    volumes:
-      - "/var/lib/mongodb:/data/db"
-      - "/var/backups/mongodb:/var/backups/mongodb"
+    environment:
+      MONGO_INITDB_DATABASE: blockchain
 
-  flask:
-    build: ./flask
-    container_name: flask
+  api:
+    build: .
+    container_name: api
     restart: always
+    command: ["gunicorn", "-w", "3", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "api:app"]
     depends_on:
-      - mongo
+      - mongodb
     expose:
       - 5000
- 
-  nginx:
-    build: ./nginx
-    container_name: nginx
-    restart: always
     ports:
-      - "80:8080"
+      - 5000:5000
+    environment:
+      RPC_HOST: <host of elcash node rpc api>
+      RPC_USER: <user of elcash node rpc api>
+      RPC_PASSWORD: <password of elcash node rpc api>
+      DB_URL: <mongodb url>
+      DB_NAME: <mongodb database name>
+      DB_PORT: <mongodb port>
+    volumes:
+      - "./src:/app"
+
+  daemon:
+    build: .
+    container_name: daemon
+    restart: always
+    command: [ "python3", "daemon.py" ]
+    depends_on:
+      - mongodb
+    environment:
+      RPC_HOST: <host of elcash node rpc api>
+      RPC_USER: <user of elcash node rpc api>
+      RPC_PASSWORD: <password of elcash node rpc api>
+      DB_URL: <mongodb url>
+      DB_NAME: <mongodb database name>
+      DB_PORT: <mongodb port>
+    volumes:
+      - "./src:/app"
 

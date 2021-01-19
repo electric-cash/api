@@ -1,6 +1,6 @@
 from datetime import datetime
 from math import floor
-from models import RequestCache
+from db.models import RequestCache
 import json
 
 def get_nonempty_wallets_number_query():

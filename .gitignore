@@ -7,3 +7,5 @@ docker/bitcoind/*.py
 docker/mongo/*.py
 docker/nginx/*.py
 .pydevproject.bak
+blockchain.log
+daemon.log

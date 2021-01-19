@@ -25,4 +25,3 @@ WORKDIR /app
 COPY . /app
 RUN pip3 install -r requirements.txt
 CMD ["/usr/bin/supervisord"]
-

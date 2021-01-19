@@ -1,13 +1,22 @@
-from blockchain_analyzer import BlockchainAnalyzer
-from db import db_host, db_name, drop_db, execute_query, get_address, get_addresses, get_blockchain, get_highest_block_number_in_db, \
+from blockchain.blockchain_analyzer import BlockchainAnalyzer
+from db.db import db_host, db_name, drop_db, execute_query, get_address, get_addresses, get_blockchain, get_highest_block_number_in_db, \
                get_utxos, insert_address, insert_block
-from db_utils import create_address
+from db.db_utils import create_address
 from decimal import Decimal
 from mongobackup import backup, restore
 from mongoengine import connect
-from rpc import get_block, get_block_count
+from blockchain.rpc import get_block, get_block_count
 import logging, os, shutil, sys, time
-logging.basicConfig(level=logging.DEBUG, filename="daemon.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
+
+# logging.basicConfig(level=logging.DEBUG, filename="daemon.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s %(levelname)-8s %(message)s',
+    datefmt='%d-%m-%Y %H:%M:%S',
+    handlers=[
+        logging.StreamHandler()
+    ]
+)
 
 analyzer = BlockchainAnalyzer()
 BACKUP_FEATURE_HEIGHT = 0 # doesnt dump db before that chain height
@@ -148,12 +157,12 @@ def update_blockchain():
             
             for idx in range(new_start_block_number, new_end_block_number):
                 logging.debug("Processing block = {}".format(idx))
-                backup = backup or idx % BACKUP_INTERVAL == 0
+#                 backup = backup or idx % BACKUP_INTERVAL == 0
                 
                 block = get_block(idx)
                 n_utxos = {}
                 d_utxos = {}
-                
+
                 insert_block(block, n_utxos, d_utxos)
                 new_utxos = {**new_utxos, **n_utxos}
                 del_utxos = {**del_utxos, **d_utxos}
@@ -163,9 +172,9 @@ def update_blockchain():
                 return
             
             update_addresses(new_utxos, del_utxos)
-        
-        if backup:
-            backup_db()
+
+#         if backup:
+#             backup_db()
     except Exception as e:
         logging.error(e)
         raise
@@ -185,9 +194,10 @@ def try_to_connect():
         raise
     
 if __name__ == '__main__':
-    init_cleanup()
+#     init_cleanup()
     try_to_connect()
-    restore_db()
+#     restore_db()
+    update_analyzer()
     while True:
         update_blockchain()
         time.sleep(5)

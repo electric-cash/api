@@ -6,9 +6,9 @@ on:
       - master
 
 env:
-  ECR_REPOSITORY: electrumx
+  ECR_REPOSITORY: api
   IMAGE_TAG: ${{ github.sha }}
-  BUILD_NAME: elcash-electrumx-build-${{ github.run_id }}
+  BUILD_NAME: elcash-api-build-${{ github.run_id }}
 
 jobs:
   release:
