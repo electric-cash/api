@@ -31,4 +31,11 @@ RUN mkdir -p /elcash
 COPY logrotate-elcashd /etc/logrotate.d/elcashd
 COPY elcash.conf /elcash
 
+ARG RPC_USER=user
+ARG RPC_PASSWORD=password
+ARG RPC_PORT=8332
+RUN sed -e "s/rpcport=8332/rpcport=${RPC_PORT}/" -i /elcash/elcash.conf
+RUN sed -e "s/rpcuser=user/rpcuser=${RPC_USER}/" -i /elcash/elcash.conf
+RUN sed -e "s/rpcpassword=password/rpcpassword=${RPC_PASSWORD}/" -i /elcash/elcash.conf
+
 CMD ["elcashd","-conf=/elcash/elcash.conf"]
