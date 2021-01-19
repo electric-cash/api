@@ -1,0 +1,48 @@
+version: "3"
+services:
+  mongodb:
+    image: mongo:4.2
+    command: mongod --smallfiles --logpath=/dev/null
+    expose:
+      - 27017
+    environment:
+      MONGO_INITDB_DATABASE: blockchain
+
+  api:
+    build: .
+    container_name: api
+    restart: always
+    command: ["gunicorn", "-w", "3", "--bind", "0.0.0.0:5000", "--access-logfile", "-", "api:app"]
+    depends_on:
+      - mongodb
+    expose:
+      - 5000
+    ports:
+      - 5000:5000
+    environment:
+      RPC_HOST: <host of elcash node rpc api>
+      RPC_USER: <user of elcash node rpc api>
+      RPC_PASSWORD: <password of elcash node rpc api>
+      DB_URL: <mongodb url>
+      DB_NAME: <mongodb database name>
+      DB_PORT: <mongodb port>
+    volumes:
+      - "./src:/app"
+
+  daemon:
+    build: .
+    container_name: daemon
+    restart: always
+    command: [ "python3", "daemon.py" ]
+    depends_on:
+      - mongodb
+    environment:
+      RPC_HOST: <host of elcash node rpc api>
+      RPC_USER: <user of elcash node rpc api>
+      RPC_PASSWORD: <password of elcash node rpc api>
+      DB_URL: <mongodb url>
+      DB_NAME: <mongodb database name>
+      DB_PORT: <mongodb port>
+    volumes:
+      - "./src:/app"
+

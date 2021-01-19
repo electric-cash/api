@@ -1,6 +1,7 @@
 from decimal import Decimal
-from rpc import get_hashrate
-import datetime, db, db_queries, logging, time
+from blockchain.rpc import get_hashrate
+from db import db, db_queries
+import datetime, logging, time
 
 REORG_DEPTH = 50
 
