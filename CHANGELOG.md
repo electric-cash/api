@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.1.1 (2021-01-20)
+### Fix
+* **database:** Slightly changed connection configuration ([`71e507a`](https://github.com/electric-cash/api/commit/71e507a75898fc19e6fb4981530f70f9a5a99f9a))
+
 ## v0.1.0 (2021-01-19)
 ### Feature
 * **ci:** Refactor to unify app components and added CI ([`8ae34e9`](https://github.com/electric-cash/api/commit/8ae34e98efe124c2f3c0af7505c87f407090099f))
