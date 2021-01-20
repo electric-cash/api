@@ -23,15 +23,15 @@ db_host = os.getenv('DB_URL', 'mongo')
 db_port = os.getenv('DB_PORT', '27017')
 db_user = os.getenv('DB_USERNAME', '')
 db_pass = os.getenv('DB_PASSWORD', '')
-db_auth = os.getenv('DB_AUTHSOURCE', '')
+db_para = os.getenv('DB_URI_PARAMS', '')
 
 def get_db_uri():
     uri = db_prot + '://'
     if db_user != '' and db_pass != '':
         uri += db_user + ':' + db_pass + '@'
     uri += db_host + ':' + db_port + '/' + db_name
-    if db_auth != '':
-        uri += '?authSource=' + db_auth
+    if db_para != '':
+        uri += db_para
     return uri
 
 def get_blockchain():

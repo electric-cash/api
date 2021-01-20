@@ -90,9 +90,9 @@ For convenience `run.sh` script was added. It does all necessary steps for build
 | `DB_NAME` | `blockchain` | 
 | `DB_URL` | `mongo` | 
 | `DB_PORT` | `27017` | 
-| `DB_USERNAME` | `` | 
-| `DB_PASSWORD` | `` | 
-| `DB_AUTHSOURCE` | `` | 
+| `DB_USERNAME` | `user` | 
+| `DB_PASSWORD` | `pass` | 
+| `DB_URI_PARAMS` | `?ssl=true&ssl_ca_certs=/cert/rds-combined-ca-bundle.pem&replicaSet=rs0&readPreference=secondaryPreferred&retryWrites=false` | 
 |  |  | 
 | `RPC_USER` | `user` | 
 | `RPC_PASSWORD` | `password` | 
