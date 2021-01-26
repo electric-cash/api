@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.1.2 (2021-01-26)
+### Fix
+* **ci:** New ECR registry ([`bc6d6a7`](https://github.com/electric-cash/api/commit/bc6d6a7953108813b657af2e5c0938518d5337b5))
+
 ## v0.1.1 (2021-01-20)
 ### Fix
 * **database:** Slightly changed connection configuration ([`71e507a`](https://github.com/electric-cash/api/commit/71e507a75898fc19e6fb4981530f70f9a5a99f9a))
