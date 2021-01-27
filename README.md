@@ -1,4 +1,4 @@
-# Electric Cash Api
+# Electric Cash API
 
 A simple public JSON API written in Python and Flask. Includes a proposed production deployment system using Docker, NGINX, uWSGI and MongoDB. Deployed under http://api.electric-cash.global
 
