@@ -8,7 +8,7 @@ The API consists of 4 parts closed in separate Docker containers: the NGINX serv
 
 Both components work synergistically to handle requests coming from outside. NGINX is a kind of avant-garde when it comes to handling incoming queries. Sending the request to the API takes place through the handling of the http protocol (port 8080) to the appropriate address on which the service was hosted. Then, using the uWSGI protocol, the query is forwarded to the Flask application running on port 5000. By connecting to the database, the application handles user queries and returns the required results.
 
-At the moment, there are 6 queries that the user can request::
+At the moment, there are 6 queries that the user can request:
 
 ```python
 /miningdifficulty
