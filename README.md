@@ -2,7 +2,7 @@
 
 A simple public JSON API written in Python and Flask. Includes a proposed production deployment system using Docker, NGINX, uWSGI and MongoDB. Deployed under http://api.electric-cash.global
 
-The API consists of 4 parts closed in separate Docker containers: the NGINX server redirecting queries to the Flask application, the Flask application executing incoming queries, BTCV node and a database that stores blockchain statistics along with a daemon updating the data.
+The API consists of 4 parts closed in separate Docker containers: the NGINX server redirecting queries to the Flask application, the Flask application executing incoming queries, ELCASH node and a database that stores blockchain statistics along with a daemon updating the data.
 
 # NGINX and Flask app
 
