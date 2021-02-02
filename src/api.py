@@ -79,7 +79,7 @@ def status():
 
 @app.route('/totalsupply', methods=['GET'])
 def total_supply():
-    return analyzer.total_coin_supply()
+    return str(analyzer.total_coin_supply())
 
 @app.route('/test', methods=['GET'])
 def test():
