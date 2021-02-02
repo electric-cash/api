@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.2.0 (2021-02-02)
+### Feature
+* Add total supply endpoint ([#7](https://github.com/electric-cash/api/issues/7)) ([`29c16cc`](https://github.com/electric-cash/api/commit/29c16cc98fd4d8507eab11404b9ea605a75e431b))
+
 ## v0.1.2 (2021-01-26)
 ### Fix
 * **ci:** New ECR registry ([`bc6d6a7`](https://github.com/electric-cash/api/commit/bc6d6a7953108813b657af2e5c0938518d5337b5))
