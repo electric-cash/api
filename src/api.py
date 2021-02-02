@@ -77,6 +77,10 @@ def status():
     status = analyzer.status()
     return jsonify(status)
 
+@app.route('/total_supply', methods=['GET'])
+def total_supply():
+    return analyzer.total_coin_supply()
+
 @app.route('/test', methods=['GET'])
 def test():
     return jsonify({'test':True})
