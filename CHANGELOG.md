@@ -2,6 +2,10 @@
 
 <!--next-version-placeholder-->
 
+## v0.3.0 (2021-06-01)
+### Feature
+* **richestwallets:** Add possibility to limit addresses in response … ([#10](https://github.com/electric-cash/api/issues/10)) ([`d67dd1c`](https://github.com/electric-cash/api/commit/d67dd1c36d957ed88623cc81834ce52967163277))
+
 ## v0.2.0 (2021-02-02)
 ### Feature
 * Add total supply endpoint ([#7](https://github.com/electric-cash/api/issues/7)) ([`29c16cc`](https://github.com/electric-cash/api/commit/29c16cc98fd4d8507eab11404b9ea605a75e431b))
