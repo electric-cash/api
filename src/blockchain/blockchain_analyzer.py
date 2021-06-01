@@ -47,10 +47,10 @@ class BlockchainAnalyzer:
         return db.execute_query(pipeline, self.__blockchain, type=type, params=params, default=['Not enough data'])
 
     def richest_wallets(self, limit=20):
-        if limit not in range(1, 200):
+        if not 1 <= limit <= 200:
            limit = 20
 
-        addresses = self.__addresses.order_by('-balance').limit(20)
+        addresses = self.__addresses.order_by('-balance').limit(limit)
         total_coin_supply = Decimal(self.total_coin_supply())
         wallets = []
         for address in addresses:
