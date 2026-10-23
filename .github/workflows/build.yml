@@ -23,6 +23,7 @@ env:
 
 jobs:
   build:
+    name: test (MongoDB ${{ matrix.mongodb }})
     runs-on: ubuntu-latest
     timeout-minutes: 15
     strategy:
@@ -116,4 +117,16 @@ jobs:
         run: |
           docker rm -f api-cache-smoke-ci api-cache-test-rpc api-cache-test-mongo >/dev/null 2>&1 || true
           docker network rm api-cache-ci >/dev/null 2>&1 || true
+
+  build_gate:
+    name: build
+    needs: build
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Require every matrix variant to pass
+        env:
+          MATRIX_RESULT: ${{ needs.build.result }}
+        run: test "$MATRIX_RESULT" = success
 
