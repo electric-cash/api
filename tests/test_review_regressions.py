@@ -88,7 +88,7 @@ def test_rpc_timeout_is_bounded_and_classified(monkeypatch):
     monkeypatch.setattr(rpc.requests, 'post', post)
     with pytest.raises(RuntimeError, match='RPC'):
         rpc.RPC('getblockcount').execute()
-    assert post.call_args.kwargs['timeout'] == (5, 30)
+    assert post.call_args[1]['timeout'] == (5, 30)
 
 
 def test_lagging_node_does_not_invalidate_verified_data(daemon, monkeypatch):
@@ -155,3 +155,65 @@ def test_daemon_retries_only_classified_rpc_errors(daemon, monkeypatch):
     with pytest.raises(RuntimeError, match='data failure'):
         daemon.run()
     assert update.call_count == 2
+
+
+def test_obsolete_writer_cannot_mark_writes_complete():
+    token = query_cache.begin_update()
+    query_cache.invalidate()
+    with pytest.raises(RuntimeError, match='generation changed'):
+        query_cache.mark_writes_complete(token, 11, 'block-11')
+    assert query_cache.get_pending_verification() is None
+
+
+@pytest.mark.parametrize('result', [None, True, -1, '10', 10.5])
+def test_invalid_rpc_height_is_not_accepted(monkeypatch, result):
+    response = Mock()
+    response.json.return_value = {'result': result, 'error': None}
+    monkeypatch.setattr(rpc.requests, 'post', Mock(return_value=response))
+    with pytest.raises(RuntimeError, match='RPC'):
+        rpc.get_block_count()
+
+
+def test_rpc_does_not_include_credentials_in_transport_errors(monkeypatch):
+    post = Mock(side_effect=requests.ConnectionError('http://secret-user:secret-pass@host'))
+    monkeypatch.setattr(rpc.requests, 'post', post)
+    with pytest.raises(RuntimeError) as failure:
+        rpc.get_block_hash(1)
+    assert 'secret-' not in str(failure.value)
+    assert failure.value.__suppress_context__ is True
+
+
+@pytest.mark.parametrize('method,argument,result', [
+    ('get_block_hash', 10, 'block-10'),
+    ('get_block_count', None, 10),
+    ('get_hashrate', None, 123),
+    ('get_raw_transaction', 'tx-1', {'txid': 'tx-1', 'vout': []}),
+])
+def test_valid_rpc_results_keep_their_contract(monkeypatch, method, argument, result):
+    response = Mock()
+    response.json.return_value = {'result': result, 'error': None}
+    monkeypatch.setattr(rpc.requests, 'post', Mock(return_value=response))
+    function = getattr(rpc, method)
+    assert (function() if argument is None else function(argument)) == result
+
+
+@pytest.mark.parametrize('result', [{'hash': 'block-10'}, []])
+def test_get_block_validates_rpc_result(monkeypatch, result):
+    response = Mock()
+    response.json.side_effect = [
+        {'result': 'block-10', 'error': None}, {'result': result, 'error': None},
+    ]
+    monkeypatch.setattr(rpc.requests, 'post', Mock(return_value=response))
+    if isinstance(result, dict):
+        assert rpc.get_block(10) == result
+    else:
+        with pytest.raises(RuntimeError, match='RPC'):
+            rpc.get_block(10)
+
+
+def test_invalid_rpc_hash_is_rejected(monkeypatch):
+    response = Mock()
+    response.json.return_value = {'result': 42, 'error': None}
+    monkeypatch.setattr(rpc.requests, 'post', Mock(return_value=response))
+    with pytest.raises(RuntimeError, match='RPC'):
+        rpc.get_block_hash(10)

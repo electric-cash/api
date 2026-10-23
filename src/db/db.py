@@ -6,7 +6,7 @@ from db.models import Address, Block, RequestCache, UTXO
 from mongoengine import Document
 from mongoengine.errors import NotUniqueError
 from pymongo.errors import OperationFailure
-from blockchain.rpc import get_block, get_block_count
+from blockchain.rpc import RPCError, get_block, get_block_count, get_raw_transaction
 import json, logging, os
 # logging.basicConfig(level=logging.DEBUG, filename="blockchain.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
 logging.basicConfig(
@@ -79,6 +79,32 @@ def insert_address(address):
         logging.debug('Updated address(' + str(address.hash) + ') in database')
          
 def insert_block(block, new_utxos, del_utxos):
+    previous_transactions = {}
+
+    def _is_untracked_output(txid, output_number):
+        if txid not in previous_transactions:
+            previous_transactions[txid] = get_raw_transaction(txid)
+        transaction = previous_transactions[txid]
+        if not isinstance(transaction, dict) or transaction.get('txid') != txid:
+            raise RPCError('RPC could not verify the missing input transaction')
+        outputs = transaction.get('vout')
+        if not isinstance(outputs, list):
+            raise RPCError('RPC returned invalid previous outputs')
+        matches = [output for output in outputs
+                   if isinstance(output, dict) and output.get('n') == output_number]
+        if len(matches) != 1:
+            raise RPCError('RPC could not verify the missing previous output')
+        script = matches[0].get('scriptPubKey')
+        if not isinstance(script, dict):
+            raise RPCError('RPC returned an invalid previous output script')
+        if script.get('addresses') or 'address' in script:
+            return False
+        if (not isinstance(script.get('addresses', []), list) or
+                not isinstance(script.get('hex'), str) or
+                not isinstance(script.get('type'), str) or not script['type']):
+            raise RPCError('RPC did not prove the previous output was untracked')
+        return True
+
     def _parse_inputs(txid, vin, utxo, new_utxo, del_utxo):
         for inp in vin:
             if 'coinbase' in inp:
@@ -86,8 +112,14 @@ def insert_block(block, new_utxos, del_utxos):
             in_txid = inp.txid
             in_vout = inp.vout
             tx_key = in_txid + str(in_vout)
-            try: 
+            try:
                 db_utxo = utxo.get(id=tx_key)
+            except UTXO.DoesNotExist:
+                if _is_untracked_output(in_txid, in_vout):
+                    logging.info('Skipping verified untracked input %s:%s', in_txid, in_vout)
+                    continue
+                raise
+            try:
                 if db_utxo.id in new_utxo:
                     del new_utxo[db_utxo.id]
                 else:

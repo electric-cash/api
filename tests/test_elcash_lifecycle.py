@@ -179,6 +179,9 @@ def test_begin_update_failure_prevents_block_mutation(daemon, monkeypatch):
 
 
 def test_real_ingestion_failure_cannot_publish_or_resume(daemon, monkeypatch):
+    monkeypatch.setattr(db, 'get_raw_transaction', lambda txid: {
+        'txid': txid, 'vout': [{'n': 0, 'scriptPubKey': {'addresses': ['address-one']}}],
+    })
     transaction = Tx(txid='new-tx', hash='new-tx', vin=[Vin(txid='missing', vout=0)])
     block = Block(hash='block-11', height=11, time=1, difficulty=1,
                   insert_time=1, update_time=1, tx=[transaction])
