@@ -1,193 +1,148 @@
-# API cache hardening
+# Query cache and ingestion safety
 
-Base source: `ba36f5ee710fd81e35931e0c2a181863a3114121` (ELCASH).
-This change is prepared locally. It has not been deployed to production.
-`requirements-runtime.lock` freezes a read-only inventory of deployed package
-versions, including Python 3.7-compatible dependencies and PyMongo 3.11.4. Tests
-used only isolated synthetic data; no production configuration or data was changed.
-The production Dockerfile constrains its existing requirements with this lock;
-the test image installs the same runtime lock plus test-only dependencies.
+## Behavior
 
-## Scope
+The API stores computed query results in `query_cache_v2` instead of reading or
+appending to the legacy `request_cache` collection. Existing HTTP response
+formats are unchanged.
 
-- Stop consulting or adding to the legacy `request_cache` collection.
-- Store new results in `query_cache_v2`, using the built-in unique `_id` index.
-- Include the database/collection, query type, parameters, pipeline and data
-  generation in the key. BSON encoding preserves compound-sort field order.
-  Empty results are valid cache hits.
-- Expire entries after one hour. The TTL index is created on the new collection,
-  not on the existing large collection. Application reads also check expiry,
-  independently of the asynchronous MongoDB TTL cleanup.
-- Cache total supply and nonempty-address counts without changing JSON shapes.
-- Publish a new generation only after the daemon finishes its address updates
-  and checks its stored tip against the node. Cache hits do not write to MongoDB.
-- Check each fetched block's height and parent hash against the verified anchor
-  and preceding fetched block, including across chunk boundaries, before insert.
-- Preserve ELCASH address transaction-history updates.
-- Leave interrupted updates and detected reorgs fail-closed. This is a safety
-  boundary, not an implementation of automatic blockchain recovery.
+- A cache entry's unique `_id` hashes the database/collection, query type,
+  parameters, BSON-encoded pipeline and completed data generation. BSON encoding
+  preserves field order for compound sorts. Empty results are cacheable.
+- Entries expire after one hour. Reads check expiry immediately; a TTL index
+  removes expired entries asynchronously. Cache hits do not write to MongoDB.
+- Supply and nonempty-address statistics reuse cached aggregations. Concurrent
+  misses may still compute independently; atomic upserts prevent duplicate rows,
+  not duplicate computation.
+- The daemon invalidates the generation before its first write. It publishes a
+  new ready generation only after address updates and canonical-chain checks.
+  Fetched block heights and parent hashes are checked before insertion.
+- An RPC failure before any write preserves the previous ready generation.
+  An interrupted mutation or detected inconsistency requires verified recovery.
+- Cache read/write failures fall back to the underlying query. Ingestion-state
+  write failures propagate rather than silently certifying incomplete data.
 
-Normal queries deliberately leave the old cache intact for rollback. Deleting it is a separate
-approved maintenance operation. This patch does not change miners or GitOps.
+The legacy cache is not migrated or deleted. Its cleanup is separate maintenance.
 
-## Limitations and operational change
+## Compatibility and limitations
 
-The daemon persists blocks/UTXOs before all address balances have been updated.
-Previously ignored write failures could therefore leave inconsistent statistics.
-Write failures now propagate, and an unfinished `cache_state` marker prevents a
-restart from silently resuming and publishing that data as a completed snapshot.
-A same-height node/stored-tip mismatch also requires verified recovery.
+**Operational change:** the daemon stops on unfinished updates or noncanonical
+data instead of continuing with potentially inconsistent statistics. Accept this
+behavior and establish a recovery procedure before deploying.
 
-ELCASH's legacy automatic full-database restore is retired. `check_reorg()` now
-invalidates the cache and raises a recovery-required error instead of restoring.
-`restore_db()` also invalidates and raises before any shell command, backup,
-drop or restore. Its old body could swallow restore failures and could restore
-stale cache metadata alongside partially restored application collections.
-No automatic replacement recovery procedure is implemented in this patch.
-`drop_db()` invalidates before its existing collection deletions and preserves
-the disabled `cache_state` document. Failure to invalidate aborts the deletion.
+**ELCASH recovery change:** automatic full-database restoration is disabled.
+`check_reorg()` invalidates the cache and raises; `restore_db()` also invalidates
+and raises before any backup, deletion or restore command. Its former restore
+path could suppress failures and restore stale cache metadata. No automatic
+replacement recovery is provided. `drop_db()` must invalidate successfully
+before its existing deletions and retains the disabled state marker. Address
+transaction-history updates are preserved.
 
-Do not deploy without accepting this fail-closed behavior and having an operator
-available to handle an interrupted update. Do not reset the marker merely to make
-the daemon start. Cache safety does not repair a pre-existing inconsistent DB.
-Reads during a normal update preserve the existing uncached behavior; this is
-not transaction-level snapshot isolation for the HTTP API.
+A missing or unready marker makes API queries bypass the cache. This does not
+repair underlying data: reads during an update retain the existing uncached
+behavior, without transaction-level snapshot isolation. Matching the stored tip
+to the node does not prove historical address balances or UTXOs are correct.
 
-Concurrent cold requests can still compute the same result independently; atomic
-upserts prevent duplicate rows, but do not provide a distributed computation lock.
-The legacy data and other uncached queries may still require separate maintenance.
+`requirements-runtime.lock` constrains the existing runtime so application and
+test builds resolve the same libraries. These are legacy dependencies with known
+advisories; pinning them is not a security fix. Dependency/runtime modernization
+and advisory triage remain separate work. Passing tests or `pip check` does not
+establish production readiness or security clearance.
 
-## Unresolved release and security risk
+## Run the tests
 
-An OSV baseline check was performed across both BTCV and ELCASH
-runtime locks: 30 unique package/version pairs were checked and 15 pairs had
-advisories. The affected package names across that combined baseline are Flask,
-Jinja2, Werkzeug, certifi, dnspython, gunicorn, idna, pymongo, requests and urllib3.
-These totals describe both locks together, not 15 findings specific to ELCASH.
+Run the following Bash commands from the repository root with Docker available.
+They build the application image, run tests against MongoDB 6.0.13, and exercise
+the unmodified application image over HTTP with synthetic data and an RPC stub.
 
-The affected versions are pre-existing deployed dependencies frozen for
-compatibility, not package upgrades introduced by this cache fix. No dependency
-remediation or risk acceptance is claimed here. Package upgrades remain outside
-this task and the advisory findings remain an unresolved, separate release risk.
-This dependency lookup is not a full security assessment or security clearance.
-Passing cache tests, `pip check`,
-image builds and the local HTTP smoke do not resolve these advisories.
+The tests accept only the named test MongoDB host and generate disposable
+database names. Do not substitute production connection strings or real data.
+Use a clean set of the names below; the preflight refuses existing containers.
+No host ports are exposed.
 
-## Local verification
-
-The tests use a real, isolated MongoDB 6 container and generated database names.
-No production connection string is used. The test setup accepts only the
-existing `gw-cache-mongo-20261023:27017` container, rejects database paths,
-credentials and URI options, selects a random `cache_fix_tests_*` database,
-and blocks HTTP/chain RPC. The shared daemon fixtures include valid parent
-hashes so ELCASH's additional stored-chain check can run.
-
-```powershell
-docker network create gw-cache-tests-20261023
-docker run --detach --rm --name gw-cache-mongo-20261023 --network gw-cache-tests-20261023 mongo:6.0.13 --bind_ip_all --quiet
-docker build --pull=false --build-arg PYTHON_VERSION=3.7 -f tests/Dockerfile -t gw-cache-test:py37-20261023 .
-docker run --rm --network gw-cache-tests-20261023 -e TEST_MONGODB_URI=mongodb://gw-cache-mongo-20261023:27017 -e COVERAGE_FILE=/tmp/cache.coverage --mount "type=bind,source=$($PWD.Path),target=/work,readonly" gw-cache-test:py37-20261023 tests -q --cov=db.query_cache --cov-branch --cov-report=term-missing --cov-fail-under=80
-```
-
-Create the dedicated network and MongoDB container only once for a test session.
-Each test process removes only its randomly generated database on exit. After all
-runs, remove only the dedicated fixtures you created; do not remove unrelated
-containers. Do not reuse production credentials or restore production data.
-
-Observed local verification: 59 tests passed on Python 3.7.17 and MongoDB 6.0.13,
-with 100% line and branch coverage of `db.query_cache` (61 statements, 14 branches).
-This includes actual coinbase and spend processing through `insert_block()` and
-`update_addresses()`, checking balances, spent-UTXO removal and generation rotation.
-The pre-fix regression run failed 5 tests; the additional review regressions also
-failed 5 tests before the BSON/error-handling/continuity fixes were applied.
-Both images contain all 21 supplied runtime package versions exactly, and
-`pip check` passes. The frozen packages are not an assertion that the legacy
-runtime is supported or free of vulnerabilities.
-
-## Production-image local smoke
-
-The actual ELCASH Dockerfile built successfully as
-`gw-api-candidate:elcash-cache-20261023`, image ID
-`sha256:500e884cf8a5dabe50c2e4a718b78a1c7590926200342f37978812e9912cc2f3`.
-The unmodified image ran Gunicorn against a random `cache_fix_http_*` database
-and the existing local `gw-cache-rpc-20261023` stub. Ten `/status` plus ten
-`/nonemptywalletsnumber` requests caused exactly two address aggregations. A
-further `/status` request after changing the generation returned the new supply;
-the aggregation count became three. The count response remained the number `1`.
-The readiness request is separate from these 21 contract requests.
-
-```powershell
-docker build --pull=false -t gw-api-candidate:elcash-cache-20261023 .
-docker run --detach --rm --name gw-cache-rpc-20261023 --network gw-cache-tests-20261023 --mount "type=bind,source=$($PWD.Path),target=/work,readonly" --entrypoint python gw-cache-test:py37-20261023 /work/tests/fake_rpc.py
-$testDb = 'cache_fix_http_' + [guid]::NewGuid().ToString('N')
-$apiName = 'gw-api-smoke-elcash-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-docker run --detach --rm --name $apiName --network gw-cache-tests-20261023 -e DB_URL=gw-cache-mongo-20261023 -e DB_NAME=$testDb -e RPC_HOST=gw-cache-rpc-20261023 -e RPC_USER=test -e RPC_PASSWORD=test gw-api-candidate:elcash-cache-20261023
-try {
-    docker run --rm --network gw-cache-tests-20261023 -e TEST_MONGODB_URI=mongodb://gw-cache-mongo-20261023:27017 -e TEST_DATABASE=$testDb -e TEST_API_URL=http://${apiName}:5000 --mount "type=bind,source=$($PWD.Path),target=/work,readonly" --entrypoint python gw-cache-test:py37-20261023 tests/http_smoke.py
-} finally {
-    docker stop $apiName
+```bash
+set -euo pipefail
+for name in api-cache-test-mongo api-cache-test-rpc api-cache-smoke-local; do
+  if docker container inspect "$name" >/dev/null 2>&1; then
+    echo "Test container already exists: $name" >&2
+    exit 1
+  fi
+done
+docker network create api-cache-test-network
+cleanup() {
+  docker rm -f api-cache-smoke-local api-cache-test-rpc api-cache-test-mongo >/dev/null 2>&1 || true
+  docker network rm api-cache-test-network >/dev/null 2>&1 || true
 }
+trap cleanup EXIT
+
+docker build -t api-cache-candidate:local .
+docker run --rm --network none --entrypoint python api-cache-candidate:local -m pip check
+docker build --build-arg PYTHON_VERSION=3.7 -f tests/Dockerfile -t api-cache-tests:local .
+docker run --detach --rm --name api-cache-test-mongo \
+  --network api-cache-test-network mongo:6.0.13 --bind_ip_all --quiet
+docker run --rm --network api-cache-test-network \
+  -e TEST_MONGODB_URI=mongodb://api-cache-test-mongo:27017 \
+  -e COVERAGE_FILE=/tmp/cache.coverage \
+  --mount "type=bind,source=$PWD,target=/work,readonly" \
+  api-cache-tests:local tests -q --cov=db.query_cache --cov-branch \
+  --cov-report=term-missing --cov-fail-under=80
+
+docker run --detach --rm --name api-cache-test-rpc \
+  --network api-cache-test-network \
+  --mount "type=bind,source=$PWD,target=/work,readonly" \
+  --entrypoint python api-cache-tests:local /work/tests/fake_rpc.py
+TEST_DATABASE="api_cache_http_${RANDOM}_$$"
+docker run --detach --rm --name api-cache-smoke-local \
+  --network api-cache-test-network \
+  -e DB_URL=api-cache-test-mongo -e "DB_NAME=$TEST_DATABASE" \
+  -e RPC_HOST=api-cache-test-rpc api-cache-candidate:local
+docker run --rm --network api-cache-test-network \
+  -e TEST_MONGODB_URI=mongodb://api-cache-test-mongo:27017 \
+  -e "TEST_DATABASE=$TEST_DATABASE" -e TEST_API_URL=http://api-cache-smoke-local:5000 \
+  --mount "type=bind,source=$PWD,target=/work,readonly" \
+  --entrypoint python api-cache-tests:local /work/tests/http_smoke.py
 ```
 
-The smoke database and smoke API container were removed after the run. The
-dedicated MongoDB and RPC fixtures were stopped after final validation. This is local
-candidate-image evidence, not a deployment or real-chain recovery test.
+Coverage is reported for `db.query_cache`, not the whole application. The suite
+covers query identity, expiry, concurrent upserts, write errors, ingestion,
+generation changes and reorg checks. The HTTP smoke expects 20 repeated requests
+to cause two address aggregations, then verifies fresh data after a generation
+change. Synthetic tests do not replace real-chain integration or recovery drills.
 
-## Proposed rollout, not performed
+The pull-request workflow runs these checks and uploads JUnit/coverage reports
+and a candidate-image archive identified by source SHA, retained for seven days.
+The workflow has read-only repository permissions and does not publish images
+to a registry or deploy them. The existing release workflow is unchanged.
 
-The PR workflow now builds the candidate, runs the isolated MongoDB tests and
-the HTTP image smoke, and uploads test reports plus a Docker image archive.
-The archive is named for the exact checked-out source SHA and retained for
-seven days. Loading/publishing that archive for staging is a separate approved
-operation. This workflow has read-only repository permissions, receives no AWS
-secrets, and does not push to ECR, invoke Argo CD, or run the release workflow.
-Its shell steps were executed locally; actual GitHub job and artifact status
-must be checked separately after publication. Existing master release behavior
-is unchanged.
+## Deployment prerequisites
 
-1. Review the complete API/daemon patch together. Build from the pinned source
-   plus this patch, not from an unrelated newer branch.
-2. Test the paired API and daemon on an isolated non-production database. Cover
-   successful ingestion, interruption, reorg detection, rollback and HTTP shapes.
-3. Confirm backups and an application-data-only recovery procedure. A restore
-   must not restore `cache_state` or `query_cache_v2` from a dump.
-4. Require an initial data-consistency preflight before enabling the new cache:
-   independently verify that stored blocks, UTXOs and address balances agree
-   with the canonical chain at a consistent checkpoint. Matching the stored tip
-   height and hash alone cannot detect pre-existing wrong address/UTXO balances.
-   Do not treat a successful new ingestion or a ready marker as that evidence.
-   If consistency is unverified or fails, keep caching disabled and use the
-   separately approved recovery procedure before proceeding.
-5. In an approved window, roll out the daemon first. A pre-existing database has
-   no ready marker; caching starts only after the next successful ingestion.
-6. Verify the daemon completed an update, `cache_state.ready` is true, and the
-   stored height/hash agrees with the node. Then roll out the API.
-7. Confirm repeated identical requests use the `_id` index and reuse results.
-   Compare worker timeouts, HTTP 5xx, MongoDB slow queries and CPU with baseline.
-8. Do not remove old cache data in the rollout. Schedule cleanup independently.
+1. Review and validate the API and daemon together on an isolated database.
+   Exercise interrupted ingestion, reorg detection and the recovery procedure.
+2. Verify existing blocks, UTXOs and balances against a canonical checkpoint.
+   Neither a matching tip hash nor a successful subsequent update proves the
+   consistency of historical data.
+3. Confirm a backup and application-data-only recovery path. Do not restore
+   `cache_state` or `query_cache_v2` from a backup.
+4. Deploy the daemon before the API. A database without a ready marker bypasses
+   caching until a complete new ingestion has published a ready generation.
+5. Verify canonical tip, ready state and repeated-request behavior. Compare
+   HTTP errors, worker timeouts, slow queries and database load with baseline.
+   Leave legacy-cache deletion outside this rollout.
 
-## Interrupted update or reorg
+## Recovery and rollback
 
-Stop the affected daemon before recovery. Preserve evidence and a backup first.
-Verify or rebuild the affected `block`, `address` and `utxo` data from a canonical
-source in an isolated database. A height match alone is not a balance/UTXO check.
-Never restore the new cache/state collections from a backup.
+After an interrupted update or detected reorg, stop the affected daemon and
+preserve diagnostic evidence and a backup. Verify or rebuild application data
+from a canonical source in isolation. Do not reset the marker just to restart
+ingestion, or assume that bypassing the cache makes inconsistent data safe.
 
-After application data has been independently verified and with the daemon still
-stopped, an approved operator can remove only the `_id: "blockchain"` marker from
-`cache_state`. Restart the daemon and verify a complete new block update creates
-a fresh ready generation. Until then the API bypasses the cache. This procedure
-does not authorize database changes or define an unverified restore as safe.
+Only after data consistency has been independently verified, with the daemon
+still stopped, may the operator remove the `_id: "blockchain"` marker from
+`cache_state`. Restart and verify a complete update publishes a fresh ready
+generation. This is a prerequisite, not an automated data-recovery implementation.
 
-## Rollback
-
-Roll back the API first and verify all API instances are on the previously
-recorded image digest before rolling back the daemon. Never leave the new API
-running with the old daemon: the old daemon does not invalidate cache generations
-when it mutates data, so the new API could continue serving stale cached results.
-Use the normal approved deployment path for both steps.
-
-No legacy collection was migrated or removed. The previous code ignores the new
-cache collections, but also lacks the new failure guards. Do not roll back to
-bypass a known data-integrity incident. The initial data-consistency preflight
-remains required when the new cache is enabled again.
+Roll back the API first, confirm all API instances use the previous image, then
+roll back the daemon. **Do not run the new API with the old daemon:** the old
+daemon does not invalidate generations and could leave cached results stale.
+The previous code ignores the new collections but also lacks these safety
+guards. Do not roll back merely to bypass a known data-integrity failure.
