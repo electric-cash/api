@@ -217,3 +217,14 @@ def test_invalid_rpc_hash_is_rejected(monkeypatch):
     monkeypatch.setattr(rpc.requests, 'post', Mock(return_value=response))
     with pytest.raises(RuntimeError, match='RPC'):
         rpc.get_block_hash(10)
+
+
+def test_rpc_error_during_partial_writes_stops_without_retrying(daemon, monkeypatch):
+    query_cache.begin_update()
+    update = Mock(side_effect=[rpc.RPCError('RPC unavailable'), RuntimeError('unexpected retry')])
+    monkeypatch.setattr(daemon, 'try_to_connect', lambda: None)
+    monkeypatch.setattr(daemon, 'update_blockchain', update)
+    monkeypatch.setattr(daemon.time, 'sleep', lambda seconds: None)
+    with pytest.raises(RuntimeError, match='unfinished'):
+        daemon.run()
+    assert update.call_count == 1
