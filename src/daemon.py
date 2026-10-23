@@ -228,6 +228,8 @@ def run():
         try:
             update_blockchain()
         except RPCError as error:
+            if query_cache.get_pending_verification() is None:
+                query_cache.assert_no_pending_update()
             logging.warning('%s; retrying after the polling interval', error)
         time.sleep(5)
 
