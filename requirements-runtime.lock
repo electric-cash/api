@@ -1,0 +1,23 @@
+# Versions supplied from the deployed ELCASH inventory on 2026-10-23.
+# Preserve the runtime for this incident fix; dependency upgrades are separate.
+WTForms==2.3.3
+Werkzeug==1.0.1
+urllib3==1.26.5
+requests==2.25.1
+pymongo==3.11.4
+mongoengine==0.23.1
+mongobackup==0.2.4
+MarkupSafe==2.0.1
+Jinja2==2.11.3
+itsdangerous==0.24
+idna==2.10
+gunicorn==20.0.4
+Flask==1.1.4
+Flask-WTF==0.15.1
+flask-mongoengine==1.0.0
+email-validator==1.1.2
+dnspython==2.1.0
+click==7.1.2
+chardet==4.0.0
+certifi==2021.5.30
+boto==2.49.0

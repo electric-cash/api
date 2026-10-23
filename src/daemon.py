@@ -3,10 +3,11 @@ from db.db import get_db_uri, drop_db, execute_query, get_address, get_addresses
                get_utxos, insert_address, insert_block
 from db.db_utils import create_address
 from decimal import Decimal
-from mongobackup import backup, restore
+from mongobackup import backup
 from mongoengine import connect
-from blockchain.rpc import get_block, get_block_count
-import logging, os, shutil, sys, time
+from blockchain.rpc import get_block, get_block_count, get_block_hash
+from db import query_cache
+import logging, shutil, sys, time
 
 # logging.basicConfig(level=logging.DEBUG, filename="daemon.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
 logging.basicConfig(
@@ -84,31 +85,8 @@ def update_analyzer():
     analyzer.set_utxos(get_utxos())
         
 def restore_db(reorg=False):
-    def _last_backup():
-        filename = os.popen('ls -ltr /var/backups/mongodb | tail -n 1 | egrep "backup.*" -o').readline()
-        if filename:
-            return '/var/backups/mongodb/' + filename.replace('\n', '')
-        return None
-    
-    try:
-        file_to_restore = _last_backup()
-        
-        if file_to_restore:
-            drop_db()
-            logging.debug("File to restore: " + file_to_restore)
-            restore('""', '""', file_to_restore, backup_directory_output_path='/tmp/mongo_dump_restore')
-            logging.info("DB restored to height: {}".format(get_highest_block_number_in_db()))
-        elif not reorg:
-            logging.warn("No backup to restore")
-            backup('""', '""', "/var/backups/mongodb/", mongo_backup_directory_path='/tmp/mongo_dump_backup', purge_local=30)
-            logging.info("Initial database state dumped at height: {}".format(get_highest_block_number_in_db()))
-        else:
-            logging.warn("No backup to restore and chain reorg occured. Need to fill DB from scratch.")
-            drop_db()
-    except Exception as e:
-        logging.warn(e)
-    
-    update_analyzer()
+    query_cache.invalidate()
+    raise RuntimeError('Automatic database restore is disabled; verified recovery required')
 
 def backup_db():
     current_height = analyzer.max_block_number()
@@ -128,9 +106,18 @@ def check_reorg(chunk_size):
     
     reorg = not analyzer.check_chain(chunk_size)
     if reorg:
-        restore_db(True)
+        query_cache.invalidate()
+        raise RuntimeError('Stored blockchain is inconsistent; verified recovery required')
         
     return reorg
+
+
+def _verify_stored_tip(node_height):
+    tip = get_blockchain().only('hash', 'height').order_by('-height').first()
+    if tip is not None and (tip.height > node_height or get_block_hash(tip.height) != tip.hash):
+        query_cache.invalidate()
+        raise RuntimeError('Stored blockchain tip is not canonical; verified recovery required')
+    return tip
     
 def update_blockchain():
     def _reexecute_queries():
@@ -141,8 +128,15 @@ def update_blockchain():
             analyzer.mining_difficulty(interval, lower_height, upper_height)
             analyzer.transaction_volume(interval, lower_height, upper_height)
     
+    query_cache.assert_no_pending_update()
     start_block_number = analyzer.max_block_number() + 1
     end_block_number = get_block_count() + 1
+    tip = _verify_stored_tip(end_block_number - 1)
+    if start_block_number == end_block_number:
+        return
+
+    generation = None
+    previous_hash = tip.hash if tip is not None else None
     chunk_size = end_block_number - start_block_number
     iterations = chunk_size // MAX_CHUNK_SIZE + 1
     backup = False
@@ -160,16 +154,23 @@ def update_blockchain():
 #                 backup = backup or idx % BACKUP_INTERVAL == 0
                 
                 block = get_block(idx)
+                if (block.get('height') != idx or
+                        (previous_hash is not None and block.get('previousblockhash') != previous_hash)):
+                    query_cache.invalidate()
+                    raise RuntimeError('Fetched block does not extend the canonical chain; verified recovery required')
                 n_utxos = {}
                 d_utxos = {}
 
+                if generation is None:
+                    generation = query_cache.begin_update()
                 insert_block(block, n_utxos, d_utxos)
+                previous_hash = block['hash']
                 new_utxos = {**new_utxos, **n_utxos}
                 del_utxos = {**del_utxos, **d_utxos}
                 update_analyzer()
                 
-            if start_block_number > 0 and check_reorg(min(chunk_size, MAX_CHUNK_SIZE)):
-                return
+            if start_block_number > 0:
+                check_reorg(min(chunk_size, MAX_CHUNK_SIZE))
             
             update_addresses(new_utxos, del_utxos)
 
@@ -179,8 +180,9 @@ def update_blockchain():
         logging.error(e)
         raise
     
-    if start_block_number != end_block_number:
-        _reexecute_queries()
+    _verify_stored_tip(get_block_count())
+    query_cache.complete_update(generation)
+    _reexecute_queries()
 
 def init_cleanup():
     shutil.rmtree('/tmp/mongo_dump_backup', True)
