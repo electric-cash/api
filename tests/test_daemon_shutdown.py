@@ -1,4 +1,5 @@
 import signal
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -27,8 +28,8 @@ def shutdown_control(daemon, monkeypatch):
     monkeypatch.setattr(signal, 'signal', register)
     monkeypatch.setattr(daemon, 'try_to_connect', Mock())
     monkeypatch.setattr(daemon, 'update_analyzer', Mock())
-    monkeypatch.setattr(daemon.time, 'sleep', Mock(side_effect=AssertionError(
-        'Daemon slept or retried after a shutdown request')))
+    monkeypatch.setattr(daemon, 'time', SimpleNamespace(sleep=Mock(side_effect=AssertionError(
+        'Daemon slept or retried after a shutdown request'))))
     return request, handlers, previous
 
 
@@ -152,7 +153,8 @@ def test_shutdown_finishes_written_prefix_without_ingesting_the_backlog(
         'previousblockhash': 'block-' + str(height - 1),
     })
 
-    def insert(block, new, deleted):
+    def insert(block, new, deleted, before_write):
+        before_write()
         inserted.append(block['height'])
         Block(hash=block['hash'], height=block['height'],
               previousblockhash=block['previousblockhash'], time=1,

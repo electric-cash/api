@@ -6,6 +6,7 @@ from db.models import Address, Block, RequestCache, UTXO
 from mongoengine import Document
 from mongoengine.errors import NotUniqueError
 from pymongo.errors import OperationFailure
+from urllib.parse import parse_qsl, urlencode
 from blockchain.rpc import RPCError, get_block, get_block_count, get_raw_transaction
 import json, logging, os
 # logging.basicConfig(level=logging.DEBUG, filename="blockchain.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
@@ -26,12 +27,17 @@ db_user = os.getenv('DB_USERNAME', '')
 db_pass = os.getenv('DB_PASSWORD', '')
 db_para = os.getenv('DB_URI_PARAMS', '')
 
-def get_db_uri():
+def get_db_uri(primary_reads=False):
     uri = db_prot + '://'
     if db_user != '' and db_pass != '':
         uri += db_user + ':' + db_pass + '@'
     uri += db_host + ':' + db_port + '/' + db_name
-    if db_para != '':
+    if primary_reads:
+        options = [(key, value) for key, value in parse_qsl(db_para.lstrip('?'), keep_blank_values=True)
+                   if key.lower() not in ('readpreference', 'readpreferencetags', 'maxstalenessseconds')]
+        options.append(('readPreference', 'primary'))
+        uri += '?' + urlencode(options)
+    elif db_para != '':
         uri += db_para
     return uri
 
@@ -78,8 +84,9 @@ def insert_address(address):
         query_set.update(balance=address.balance, txs=address.txs, update_time=address.update_time)
         logging.debug('Updated address(' + str(address.hash) + ') in database')
          
-def insert_block(block, new_utxos, del_utxos):
+def insert_block(block, new_utxos, del_utxos, before_write=None):
     previous_transactions = {}
+    untracked_inputs = set()
 
     def _is_untracked_output(txid, output_number):
         if txid not in previous_transactions:
@@ -115,7 +122,7 @@ def insert_block(block, new_utxos, del_utxos):
             try:
                 db_utxo = utxo.get(id=tx_key)
             except UTXO.DoesNotExist:
-                if _is_untracked_output(in_txid, in_vout):
+                if tx_key in untracked_inputs:
                     logging.info('Skipping verified untracked input %s:%s', in_txid, in_vout)
                     continue
                 raise
@@ -166,6 +173,26 @@ def insert_block(block, new_utxos, del_utxos):
         return
     
     db_block = create_block(block)
+    # Resolve all RPC-dependent input proofs before the first persisted change.
+    outputs_in_block = {}
+    utxo = get_utxos()
+    for tx in db_block.tx:
+        for inp in tx.vin:
+            if 'coinbase' in inp:
+                continue
+            key = inp.txid + str(inp.vout)
+            if key in outputs_in_block:
+                if not outputs_in_block[key]:
+                    untracked_inputs.add(key)
+            elif not utxo(id=key):
+                if not _is_untracked_output(inp.txid, inp.vout):
+                    query_cache.invalidate()
+                    raise UTXO.DoesNotExist('Tracked input is missing from the application database')
+                untracked_inputs.add(key)
+        for out in tx.vout:
+            outputs_in_block[tx.txid + str(out.n)] = bool(out.scriptPubKey.addresses)
+    if before_write is not None:
+        before_write()
     _before_insert_block(db_block, new_utxos, del_utxos)
     set_insert_or_update_time(db_block)
     try:
