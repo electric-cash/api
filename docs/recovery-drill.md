@@ -64,6 +64,10 @@ Its existing teardown removes the disposable database/RPC containers and network
 
 ## Production gate remains separate
 
+Complete the [component backup and rollout gates](backup-and-rollout.md),
+including a verified writer-quiescence method. This drill does not provide an
+operator pause protocol for the legacy daemon.
+
 Before a rollout, identify an actual backup, its age, storage location, access
 controls, and restoration procedure. Demonstrate restoration to an isolated
 environment and independently reconcile application data with a canonical

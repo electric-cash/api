@@ -143,6 +143,10 @@ production backup or the consistency of production application data.
 
 ## Deployment prerequisites
 
+Use the [component backup and rollout procedure](backup-and-rollout.md) to
+record the environment-specific gates. In particular, stopping a daemon does
+not by itself prove a completed, consistent ingestion boundary.
+
 1. Review and validate the API and daemon together on an isolated database.
    Exercise interrupted ingestion, reorg detection and the recovery procedure.
 2. Verify existing blocks, UTXOs and balances against a canonical checkpoint.
