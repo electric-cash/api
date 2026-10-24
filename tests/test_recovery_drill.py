@@ -167,3 +167,31 @@ def test_stopped_worker_check_rejects_state_changed_before_failure(copies, field
     source.cache_state.update_one({'_id': 'blockchain'}, {'$set': {field: True}})
     with pytest.raises(RuntimeError, match='readiness'):
         verify_stopped_state(source, expected)
+
+
+def test_shell_guard_rejects_docker_publish_all_before_any_database_work(tmp_path):
+    docker = tmp_path / 'docker'
+    docker.write_text('''#!/usr/bin/env bash
+set -eu
+case "$1" in
+  network) echo true ;;
+  inspect)
+    case "${@: -1}" in
+      *PublishAllPorts*) echo true ;;
+      *PortBindings*) echo 0 ;;
+      *'len .NetworkSettings.Networks'*) echo 1 ;;
+      *) echo isolated-network-id ;;
+    esac ;;
+  *) echo 'Unexpected database operation after published-port preflight' >&2; exit 93 ;;
+esac
+''', encoding='ascii')
+    docker.chmod(0o755)
+    root = Path(__file__).resolve().parents[1]
+    env = dict(os.environ, PATH=str(tmp_path) + os.pathsep + os.environ['PATH'],
+               TEST_DATABASE='api_cache_http_guard', TEST_NETWORK='isolated-fixture')
+    result = subprocess.run(['bash', str(root / 'tests/recovery_smoke.sh')], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            universal_newlines=True, timeout=10)
+    assert result.returncode == 1, result.stderr
+    assert 'Fixture containers must' in result.stderr
+    assert 'Unexpected database operation' not in result.stderr
