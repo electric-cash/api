@@ -16,6 +16,7 @@ fi
 for container in api-cache-test-mongo api-cache-test-rpc; do
   if [[ -z "$(docker inspect "$container" --format "{{with index .NetworkSettings.Networks \"$TEST_NETWORK\"}}{{.NetworkID}}{{end}}")" ]] ||
      [[ "$(docker inspect "$container" --format '{{len .NetworkSettings.Networks}}')" != 1 ]] ||
+     [[ "$(docker inspect "$container" --format '{{.HostConfig.PublishAllPorts}}')" != false ]] ||
      [[ "$(docker inspect "$container" --format '{{len .HostConfig.PortBindings}}')" != 0 ]]; then
     echo 'Fixture containers must use only the isolated network and publish no ports' >&2
     exit 1
