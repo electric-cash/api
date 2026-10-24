@@ -1,4 +1,6 @@
 from copy import deepcopy
+import builtins
+import importlib
 import os
 from pathlib import Path
 import subprocess
@@ -9,6 +11,14 @@ from bson.int64 import Int64
 import pytest
 
 from recovery_smoke import application_digest, validate_environment, verify_restored_copy
+
+
+RPC_CREDENTIALS = [
+    ('RPC_USER', 'fixture-user'),
+    ('RPC_PASSWORD', 'fixture-password'),
+    ('RPC_USER', 'fixture@other.invalid:8332/path?query#fragment'),
+    ('RPC_PASSWORD', 'fixture@other.invalid:8332/path?query#fragment'),
+]
 
 
 def environment():
@@ -33,7 +43,7 @@ def environment():
     ('DB_NAME', 'api_cache_http_' + 'x' * 33 + '_recovery_source'),
     ('RPC_HOST', 'real-node.example'),
     ('RPC_PORT', '8333'),
-])
+] + RPC_CREDENTIALS)
 def test_recovery_drill_refuses_nonisolated_settings(key, value):
     values = environment()
     values[key] = value
@@ -46,6 +56,47 @@ def test_recovery_drill_accepts_only_its_fixture_database_pair():
         'api_cache_http_drill_recovery_source',
         'api_cache_http_drill_recovery_restored',
     )
+
+
+@pytest.mark.parametrize('key', ['RPC_USER', 'RPC_PASSWORD'])
+def test_recovery_drill_accepts_empty_rpc_credentials(key):
+    values = environment()
+    values[key] = ''
+    assert validate_environment(values) == validate_environment(environment())
+
+
+@pytest.mark.parametrize('key,value', RPC_CREDENTIALS)
+@pytest.mark.parametrize('module_name,arguments', [
+    ('recovery_smoke', ['prepare']),
+    ('recovery_smoke', ['--child', 'normal']),
+    ('service_smoke', ['prepare']),
+])
+def test_rpc_credentials_rejected_before_application_imports_or_connection(
+        monkeypatch, key, value, module_name, arguments):
+    module = importlib.import_module(module_name)
+    for name in ('DB_PROTOCOL', 'DB_PORT', 'DB_USERNAME', 'DB_PASSWORD',
+                 'DB_URI_PARAMS', 'RPC_PORT', 'RPC_USER', 'RPC_PASSWORD'):
+        monkeypatch.delenv(name, raising=False)
+    for name, setting in environment().items():
+        monkeypatch.setenv(name, setting)
+    monkeypatch.setenv(key, value)
+    monkeypatch.setattr(sys, 'argv', [module_name] + arguments)
+
+    def blocked_connection(*args, **kwargs):
+        pytest.fail('Recovery connected before rejecting RPC credentials')
+
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name.split('.')[0] in ('daemon', 'blockchain', 'db'):
+            pytest.fail('Recovery imported application code before rejecting RPC credentials')
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(module, 'MongoClient', blocked_connection)
+    monkeypatch.setattr(builtins, '__import__', guarded_import)
+    with pytest.raises(RuntimeError, match='isolated') as error:
+        module.main()
+    assert value not in str(error.value)
 
 
 @pytest.fixture
