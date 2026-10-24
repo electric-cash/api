@@ -11,11 +11,16 @@ import sys
 import tempfile
 import time
 
-from bson import json_util
+from bson import BSON, json_util
 from pymongo import MongoClient
 
 
 CACHE_COLLECTIONS = frozenset(('cache_state', 'query_cache_v2', 'request_cache'))
+
+
+def require(condition, message):
+    if not condition:
+        raise RuntimeError(message)
 
 
 def validate_environment(values):
@@ -37,24 +42,23 @@ def validate_environment(values):
 
 
 def application_digest(database):
-    collections = []
+    digest = hashlib.sha256()
     for name in sorted(database.list_collection_names()):
         if name in CACHE_COLLECTIONS:
             continue
         collection = database[name]
         indexes = {}
         for index_name, options in collection.index_information().items():
-            indexes[index_name] = {
-                key: options[key] for key in (
-                    'key', 'unique', 'sparse', 'expireAfterSeconds',
-                    'partialFilterExpression', 'collation') if key in options}
-        collections.append({
-            'name': name,
-            'documents': list(collection.find().sort('_id', 1)),
-            'indexes': indexes,
-        })
-    encoded = json_util.dumps(collections, sort_keys=True, separators=(',', ':')).encode()
-    return hashlib.sha256(encoded).hexdigest()
+            indexes[index_name] = {key: value for key, value in options.items()
+                                   if key not in ('ns', 'v')}
+        metadata = json_util.dumps(
+            {'options': collection.options(), 'indexes': indexes},
+            json_options=json_util.CANONICAL_JSON_OPTIONS,
+            sort_keys=True, separators=(',', ':'))
+        digest.update(BSON.encode({'collection': name, 'metadata': metadata}))
+        for document in collection.find().sort('_id', 1):
+            digest.update(BSON.encode(document))
+    return digest.hexdigest()
 
 
 def verify_restored_copy(source, restored):
@@ -62,6 +66,15 @@ def verify_restored_copy(source, restored):
         raise RuntimeError('Restored database must not contain cache collections')
     if application_digest(source) != application_digest(restored):
         raise RuntimeError('Restored application documents or indexes do not match the baseline')
+
+
+def verify_stopped_state(database, expected_digest):
+    require(application_digest(database) == expected_digest,
+            'Stopped worker changed application data')
+    state = database.cache_state.find_one({'_id': 'blockchain'})
+    require(state is not None and state.get('ready') is False and
+            state.get('writes_complete', False) is False,
+            'Stopped worker changed cache readiness')
 
 
 def run_once(database, mode='normal', expected_error=None):
@@ -79,27 +92,29 @@ def run_once(database, mode='normal', expected_error=None):
 def kill_at_checkpoint(database, mode):
     with tempfile.TemporaryDirectory(prefix='api-recovery-') as directory:
         checkpoint = Path(directory) / 'checkpoint'
-        process = subprocess.Popen(
-            [sys.executable, __file__, '--child', mode, '--checkpoint', str(checkpoint)],
-            env=dict(os.environ, DB_NAME=database),
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-        try:
-            deadline = time.monotonic() + 30
-            while not checkpoint.exists():
-                if process.poll() is not None:
-                    stdout, stderr = process.communicate(timeout=5)
-                    raise RuntimeError('Worker exited before checkpoint: ' + stdout + stderr[-1500:])
-                if time.monotonic() >= deadline:
-                    raise RuntimeError('Recovery checkpoint timed out')
-                time.sleep(0.05)
-            process.kill()
-            process.communicate(timeout=10)
-            if process.returncode != -9:
-                raise RuntimeError('Recovery drill did not terminate the worker with SIGKILL')
-        finally:
-            if process.poll() is None:
+        log_path = Path(directory) / 'worker.log'
+        with log_path.open('w') as output:
+            process = subprocess.Popen(
+                [sys.executable, __file__, '--child', mode, '--checkpoint', str(checkpoint)],
+                env=dict(os.environ, DB_NAME=database),
+                stdout=output, stderr=subprocess.STDOUT)
+            try:
+                deadline = time.monotonic() + 30
+                while not checkpoint.exists():
+                    if process.poll() is not None:
+                        log = log_path.read_text(errors='replace')[-1500:]
+                        raise RuntimeError('Worker exited before checkpoint: ' + log)
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError('Recovery checkpoint timed out')
+                    time.sleep(0.05)
                 process.kill()
-                process.communicate(timeout=10)
+                process.wait(timeout=10)
+                require(process.returncode == -9,
+                        'Recovery drill did not terminate the worker with SIGKILL')
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
 
 
 def child(mode, checkpoint):
@@ -145,15 +160,22 @@ def verify_fixture(database, height):
     blocks = database[Block._get_collection_name()]
     addresses = database[Address._get_collection_name()]
     utxos = database[UTXO._get_collection_name()]
-    assert blocks.count_documents({}) == height + 1
-    assert blocks.find_one({'height': height})['_id'] == 'block-' + str(height)
+    require(blocks.count_documents({}) == height + 1, 'Unexpected fixture block count')
+    tip = blocks.find_one({'height': height})
+    require(tip is not None and tip['_id'] == 'block-' + str(height),
+            'Unexpected fixture canonical tip')
     sender = addresses.find_one({'_id': 'sender'})
-    assert Decimal(str(sender['balance'])) == (2 if height == 0 else 0)
-    assert utxos.count_documents({}) == 1
+    require(sender is not None and Decimal(str(sender['balance'])) == (2 if height == 0 else 0),
+            'Unexpected fixture sender balance')
+    require(utxos.count_documents({}) == 1, 'Unexpected fixture UTXO count')
     expected_utxo = 'origin0' if height == 0 else 'spend0'
-    assert utxos.find_one({'_id': expected_utxo})['value'] == (2 if height == 0 else 3)
+    utxo = utxos.find_one({'_id': expected_utxo})
+    require(utxo is not None and utxo['value'] == (2 if height == 0 else 3),
+            'Unexpected fixture UTXO value')
     if height == 1:
-        assert Decimal(str(addresses.find_one({'_id': 'recipient'})['balance'])) == 3
+        recipient = addresses.find_one({'_id': 'recipient'})
+        require(recipient is not None and Decimal(str(recipient['balance'])) == 3,
+                'Unexpected fixture recipient balance')
 
 
 def exercise(source, restored):
@@ -164,33 +186,34 @@ def exercise(source, restored):
 
     kill_at_checkpoint(source.name, 'partial')
     state = source.cache_state.find_one({'_id': 'blockchain'})
-    assert state['ready'] is False and state.get('writes_complete', False) is False
+    require(state is not None and state['ready'] is False and
+            state.get('writes_complete', False) is False, 'Partial writes were not marked unready')
     interrupted = application_digest(source)
-    assert interrupted != baseline
+    require(interrupted != baseline, 'Interrupted worker did not modify application data')
     run_once(source.name, expected_error='unfinished')
-    assert application_digest(source) == interrupted
-    assert source.cache_state.find_one({'_id': 'blockchain'})['ready'] is False
+    verify_stopped_state(source, interrupted)
 
     # The restored database was checked before either interrupted write and is
     # separate from the damaged source; never reset the source's readiness flag.
-    assert application_digest(restored) == baseline
+    require(application_digest(restored) == baseline, 'Restored application baseline changed')
     kill_at_checkpoint(restored.name, 'complete')
     verify_fixture(restored, 1)
     state = restored.cache_state.find_one({'_id': 'blockchain'})
-    assert state['ready'] is False and state['writes_complete'] is True
+    require(state is not None and state['ready'] is False and state['writes_complete'] is True,
+            'Completed writes were not marked for verification')
     generation = state['generation']
     completed = application_digest(restored)
     run_once(restored.name)
-    assert application_digest(restored) == completed
+    require(application_digest(restored) == completed, 'Restart replayed completed writes')
     state = restored.cache_state.find_one({'_id': 'blockchain'})
-    assert state['ready'] is True and state['generation'] == generation
+    require(state is not None and state['ready'] is True and state['generation'] == generation,
+            'Restart did not verify the same completed generation')
     verify_fixture(restored, 1)
 
     run_once(restored.name, mode='reorg', expected_error='canonical')
-    assert application_digest(restored) == completed
-    state = restored.cache_state.find_one({'_id': 'blockchain'})
-    assert state['ready'] is False and state['writes_complete'] is False
+    verify_stopped_state(restored, completed)
     run_once(restored.name, expected_error='unfinished')
+    verify_stopped_state(restored, completed)
     return {
         'result': 'passed', 'baseline_application_sha256': baseline,
         'backup_documents_and_indexes': 'matched', 'cache_metadata_restored': False,
@@ -227,7 +250,7 @@ def main():
                 raise RuntimeError('Recovery fixture databases must be empty')
             run_once(source_name, 'baseline')
             verify_fixture(source, 0)
-            assert source.query_cache_v2.count_documents({}) > 0
+            require(source.query_cache_v2.count_documents({}) > 0, 'Baseline cache was not populated')
             source.request_cache.insert_one({'_id': 'legacy-fixture', 'result': []})
             result = {'result': 'prepared', 'application_sha256': application_digest(source)}
         else:

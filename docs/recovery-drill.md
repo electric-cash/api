@@ -11,14 +11,14 @@ It is a recovery-mechanism test, not evidence that a production backup exists.
 2. Run real `mongodump` and `mongorestore`, restoring application collections
    into a different, empty fixture database. Exclude `cache_state`,
    `query_cache_v2`, and the legacy `request_cache`.
-3. Compare restored application documents and index definitions with the
+3. Compare restored application BSON documents, collection options, and index definitions with the
    quiescent baseline. Reject missing indexes, changed data, and restored cache
    metadata. Also check the fixture's known balances, UTXOs, and canonical tip.
-4. Kill an actual daemon subprocess with SIGKILL after a block write but before
+4. Kill an actual ingestion-worker subprocess with SIGKILL after a block write but before
    address updates. A restart must reject the unfinished batch without replaying
    it or marking its cache generation ready.
 5. Use the independently verified restored database, not a readiness reset on
-   the interrupted source. Kill its daemon after all writes complete, before
+   the interrupted source. Kill its ingestion worker after all writes complete, before
    canonical verification. A restart must verify the pending batch without
    duplicating balances or changing its generation.
 6. Simulate a conflicting canonical tip. The daemon must invalidate readiness,
@@ -27,7 +27,9 @@ It is a recovery-mechanism test, not evidence that a production backup exists.
 The interruptions and fork response are controlled test injections. The MongoDB
 server, dump/restore tools, application image, persisted state, and subprocess
 termination are real. This is not production-scale load or live-chain recovery
-validation.
+validation. Workers import the application's actual `update_analyzer()` and
+`update_blockchain()` functions; they do not test the full `daemon.py` service
+entry point, its continuous polling loop, or the container's service lifecycle.
 
 ## Run it
 
@@ -46,8 +48,8 @@ API_IMAGE=api-cache-candidate:local \
 bash tests/recovery_smoke.sh
 ```
 
-The script refuses an external Docker network, a missing test-container network
-attachment, a reused archive, or an invalid database prefix. The Python worker
+The script refuses an external Docker network, extra fixture-container network
+attachments, published ports, a reused archive, or an invalid database prefix. The Python worker
 also rejects real database/RPC hostnames, database credentials, URI options, and
 names outside its fixture pair. A reused, nonempty source or restore database
 is rejected; choose a fresh prefix rather than deleting unknown data.

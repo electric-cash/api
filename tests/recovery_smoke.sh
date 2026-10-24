@@ -13,10 +13,14 @@ if [[ "$(docker network inspect "$TEST_NETWORK" --format '{{.Internal}}')" != tr
   echo 'Recovery drill requires an internal Docker network' >&2
   exit 1
 fi
-if [[ -z "$(docker inspect api-cache-test-mongo --format "{{with index .NetworkSettings.Networks \"$TEST_NETWORK\"}}{{.NetworkID}}{{end}}")" ]]; then
-  echo 'Test MongoDB is not attached to the isolated network' >&2
-  exit 1
-fi
+for container in api-cache-test-mongo api-cache-test-rpc; do
+  if [[ -z "$(docker inspect "$container" --format "{{with index .NetworkSettings.Networks \"$TEST_NETWORK\"}}{{.NetworkID}}{{end}}")" ]] ||
+     [[ "$(docker inspect "$container" --format '{{len .NetworkSettings.Networks}}')" != 1 ]] ||
+     [[ "$(docker inspect "$container" --format '{{len .HostConfig.PortBindings}}')" != 0 ]]; then
+    echo 'Fixture containers must use only the isolated network and publish no ports' >&2
+    exit 1
+  fi
+done
 
 checks_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 if command -v cygpath >/dev/null 2>&1; then
