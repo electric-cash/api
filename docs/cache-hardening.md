@@ -85,7 +85,7 @@ for name in api-cache-test-mongo api-cache-test-rpc api-cache-smoke-local; do
     exit 1
   fi
 done
-docker network create api-cache-test-network
+docker network create --internal api-cache-test-network
 cleanup() {
   docker rm -f api-cache-smoke-local api-cache-test-rpc api-cache-test-mongo >/dev/null 2>&1 || true
   docker network rm api-cache-test-network >/dev/null 2>&1 || true
@@ -136,6 +136,10 @@ and a candidate-image archive identified by source SHA and MongoDB test version,
 retained for seven days.
 The workflow has read-only repository permissions and does not publish images
 to a registry or deploy them. The existing release workflow is unchanged.
+
+The separate [isolated recovery drill](recovery-drill.md) exercises actual
+dump/restore and interrupted daemon processes. It does not certify an existing
+production backup or the consistency of production application data.
 
 ## Deployment prerequisites
 

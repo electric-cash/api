@@ -25,6 +25,7 @@ def environment():
     ('DB_NAME', 'blockchain'),
     ('DB_NAME', 'api_cache_http_drill_recovery_source/other'),
     ('DB_NAME', 'api_cache_http_drill'),
+    ('DB_NAME', 'api_cache_http_' + 'x' * 33 + '_recovery_source'),
     ('RPC_HOST', 'real-node.example'),
     ('RPC_PORT', '8333'),
 ])

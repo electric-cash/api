@@ -48,7 +48,7 @@ jobs:
 
       - name: Start isolated test database
         run: |
-          docker network create api-cache-ci
+          docker network create --internal api-cache-ci
           docker run --detach --rm --name api-cache-test-mongo --network api-cache-ci "mongo:$MONGO_VERSION" --bind_ip_all --quiet
 
       - name: Run regression and integration tests
@@ -85,6 +85,9 @@ jobs:
             -e RPC_HOST=api-cache-test-rpc \
             --mount "type=bind,source=$PWD/tests,target=/checks,readonly" \
             --entrypoint python api-candidate /checks/daemon_smoke.py
+
+      - name: Exercise interrupted ingestion and backup recovery
+        run: bash tests/recovery_smoke.sh
 
       - name: Package tested candidate
         run: |
