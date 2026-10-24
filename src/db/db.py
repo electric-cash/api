@@ -6,7 +6,7 @@ from db.models import Address, Block, RequestCache, UTXO
 from mongoengine import Document
 from mongoengine.errors import NotUniqueError
 from pymongo.errors import OperationFailure
-from urllib.parse import parse_qsl, urlencode
+from urllib.parse import parse_qsl
 from blockchain.rpc import RPCError, get_block, get_block_count, get_raw_transaction
 import json, logging, os
 # logging.basicConfig(level=logging.DEBUG, filename="blockchain.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
@@ -33,10 +33,15 @@ def get_db_uri(primary_reads=False):
         uri += db_user + ':' + db_pass + '@'
     uri += db_host + ':' + db_port + '/' + db_name
     if primary_reads:
-        options = [(key, value) for key, value in parse_qsl(db_para.lstrip('?'), keep_blank_values=True)
-                   if key.lower() not in ('readpreference', 'readpreferencetags', 'maxstalenessseconds')]
-        options.append(('readPreference', 'primary'))
-        uri += '?' + urlencode(options)
+        options = []
+        for option in db_para.lstrip('?').split('&'):
+            parsed = parse_qsl(option, keep_blank_values=True)
+            if parsed and parsed[0][0].lower() not in (
+                    'readpreference', 'readpreferencetags', 'maxstalenessseconds'):
+                # Some legacy PyMongo options require their opaque value unchanged.
+                options.append(option)
+        options.append('readPreference=primary')
+        uri += '?' + '&'.join(options)
     elif db_para != '':
         uri += db_para
     return uri

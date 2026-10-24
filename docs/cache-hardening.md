@@ -201,14 +201,23 @@ from mongoengine.connection import get_db
 from db.db import get_db_uri
 from db.models import CacheState
 from db.query_cache import invalidate
+from pymongo.uri_parser import parse_uri
 
 expected_name = os.environ['EXPECTED_DB_NAME']
 expected_host = os.environ['EXPECTED_DB_HOST']
-if (not expected_name or not expected_host or
+expected_port = os.environ['EXPECTED_DB_PORT']
+expected_protocol = os.environ['EXPECTED_DB_PROTOCOL']
+expected_replica_set = os.environ['EXPECTED_REPLICA_SET']
+if (not all((expected_name, expected_host, expected_port, expected_protocol)) or
         os.environ['DB_NAME'] != expected_name or
-        os.environ['DB_URL'] != expected_host):
+        os.environ['DB_URL'] != expected_host or
+        os.environ.get('DB_PORT', '27017') != expected_port or
+        os.environ.get('DB_PROTOCOL', 'mongodb') != expected_protocol):
     raise SystemExit('Database identity does not match the approved rollback target')
-connect(host=get_db_uri(primary_reads=True))
+uri = get_db_uri(primary_reads=True)
+if parse_uri(uri)['options'].get('replicaSet', '') != expected_replica_set:
+    raise SystemExit('Replica-set selection does not match the approved rollback target')
+connect(host=uri)
 database = get_db()
 if database.name != expected_name:
     raise SystemExit('Connected database does not match the approved rollback target')
@@ -216,13 +225,15 @@ invalidate()
 state = CacheState.objects.get(id='blockchain')
 if state.ready is not False or state.writes_complete is not False:
     raise SystemExit('Cache invalidation could not be confirmed; do not restart the old daemon')
-print(json.dumps({'database': database.name, 'ready': state.ready,
+print(json.dumps({'database': database.name, 'server': database.client.address,
+                  'ready': state.ready,
                   'writes_complete': state.writes_complete}))
 PY
 ```
 
-Set `EXPECTED_DB_NAME` and `EXPECTED_DB_HOST` from the independently recorded,
-approved target; do not derive them automatically from the container defaults.
+Set all `EXPECTED_*` values from the independently recorded, approved target;
+use an explicitly empty `EXPECTED_REPLICA_SET` for a standalone target. Do not
+derive these values automatically from the container defaults.
 The command deliberately refuses missing or mismatched database settings. Check
 the printed database name and disabled state against that record before
 continuing. It must run in the selected environment with the selected writers
