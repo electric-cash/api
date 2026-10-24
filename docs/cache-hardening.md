@@ -23,10 +23,25 @@ formats are unchanged.
   detected inconsistency still requires verified recovery.
 - A lagging or temporarily unavailable node is retried at the polling interval;
   it is not treated as a confirmed reorg. RPC calls have connection/read timeouts.
+- SIGTERM/SIGINT request shutdown at the next block boundary. The daemon finishes
+  the in-flight block, applies address updates for the written prefix, verifies
+  its actual tip and stops without ingesting the rest of the backlog or warming
+  statistics caches. It checks for unfinished state before acknowledging quiescence.
+  A fatal error, unresolved verification or forced kill is not a clean shutdown.
 - Cache read/write failures fall back to the underlying query. Ingestion-state
   write failures propagate rather than silently certifying incomplete data.
 
 The legacy cache is not migrated or deleted. Its cleanup is separate maintenance.
+
+Shutdown acknowledgement applies only to this candidate, not an already running
+legacy image. It proves that this process has no unfinished ingestion, not that
+historical data or other writers are consistent. The deployment's termination
+grace period must accommodate the in-flight block and its address updates and
+verification, including slow RPC and database operations; this patch does not
+change any production grace period or authorize stopping a writer.
+If writes completed but RPC verification remains pending, shutdown fails without
+acknowledgement and reports that restart will retry verification. This is distinct
+from an interrupted write that requires independently verified recovery.
 
 ## Compatibility and limitations
 
@@ -85,7 +100,7 @@ for name in api-cache-test-mongo api-cache-test-rpc api-cache-smoke-local; do
     exit 1
   fi
 done
-docker network create api-cache-test-network
+docker network create --internal api-cache-test-network
 cleanup() {
   docker rm -f api-cache-smoke-local api-cache-test-rpc api-cache-test-mongo >/dev/null 2>&1 || true
   docker network rm api-cache-test-network >/dev/null 2>&1 || true
@@ -137,7 +152,15 @@ retained for seven days.
 The workflow has read-only repository permissions and does not publish images
 to a registry or deploy them. The existing release workflow is unchanged.
 
+The separate [isolated recovery drill](recovery-drill.md) exercises actual
+dump/restore and interrupted daemon processes. It does not certify an existing
+production backup or the consistency of production application data.
+
 ## Deployment prerequisites
+
+Use the [component backup and rollout procedure](backup-and-rollout.md) to
+record the environment-specific gates. In particular, stopping a daemon does
+not by itself prove a completed, consistent ingestion boundary.
 
 1. Review and validate the API and daemon together on an isolated database.
    Exercise interrupted ingestion, reorg detection and the recovery procedure.
