@@ -1,6 +1,11 @@
 from copy import deepcopy
+import os
+from pathlib import Path
+import subprocess
+import sys
 import uuid
 
+from bson.int64 import Int64
 import pytest
 
 from recovery_smoke import application_digest, validate_environment, verify_restored_copy
@@ -88,3 +93,77 @@ def test_restored_copy_rejects_a_missing_application_index(copies):
     restored.address.drop_index('balance_1')
     with pytest.raises(RuntimeError, match='application'):
         verify_restored_copy(source, restored)
+
+
+def test_restored_copy_rejects_changed_bson_integer_types(copies):
+    source, restored = copies
+    source.address.update_one({'_id': 'sender'}, {'$set': {'counter': Int64(7)}})
+    restored.address.update_one({'_id': 'sender'}, {'$set': {'counter': 7}})
+    with pytest.raises(RuntimeError, match='application'):
+        verify_restored_copy(source, restored)
+
+
+def test_restored_copy_rejects_changed_embedded_document_order(copies):
+    source, restored = copies
+    source.address.update_one({'_id': 'sender'}, {'$set': {'ordered': {'a': 1, 'b': 2}}})
+    restored.address.update_one({'_id': 'sender'}, {'$set': {'ordered': {'b': 2, 'a': 1}}})
+    with pytest.raises(RuntimeError, match='application'):
+        verify_restored_copy(source, restored)
+
+
+def test_restored_copy_rejects_changed_text_index_options(copies):
+    source, restored = copies
+    source.address.create_index([('description', 'text')], weights={'description': 2})
+    restored.address.create_index([('description', 'text')], weights={'description': 3})
+    with pytest.raises(RuntimeError, match='application'):
+        verify_restored_copy(source, restored)
+
+
+def test_restored_copy_rejects_changed_collection_options(copies):
+    source, restored = copies
+    restored.command('collMod', 'address', validator={'balance': {'$type': 'string'}})
+    with pytest.raises(RuntimeError, match='application'):
+        verify_restored_copy(source, restored)
+
+
+def test_optimized_python_must_not_skip_fixture_verification():
+    root = Path(__file__).resolve().parents[1]
+    code = '''
+import sys
+from unittest.mock import MagicMock
+from recovery_smoke import verify_fixture
+database = MagicMock()
+database.__getitem__.return_value.count_documents.return_value = 999
+try:
+    verify_fixture(database, 0)
+except RuntimeError:
+    sys.exit(0)
+sys.exit(1)
+'''
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join((str(root / 'src'), str(root / 'tests'))))
+    result = subprocess.run([sys.executable, '-O', '-c', code], env=env,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
+    assert result.returncode == 0, result.stderr.decode()
+
+
+def test_stopped_worker_check_rejects_data_changed_before_failure(copies):
+    from recovery_smoke import verify_stopped_state
+
+    source, _ = copies
+    source.cache_state.insert_one({'_id': 'blockchain', 'ready': False, 'writes_complete': False})
+    expected = application_digest(source)
+    source.address.delete_one({'_id': 'sender'})
+    with pytest.raises(RuntimeError, match='application'):
+        verify_stopped_state(source, expected)
+
+
+@pytest.mark.parametrize('field', ['ready', 'writes_complete'])
+def test_stopped_worker_check_rejects_state_changed_before_failure(copies, field):
+    from recovery_smoke import verify_stopped_state
+
+    source, _ = copies
+    source.cache_state.insert_one({'_id': 'blockchain', 'ready': False, 'writes_complete': False})
+    expected = application_digest(source)
+    source.cache_state.update_one({'_id': 'blockchain'}, {'$set': {field: True}})
+    with pytest.raises(RuntimeError, match='readiness'):
+        verify_stopped_state(source, expected)
