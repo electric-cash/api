@@ -50,3 +50,26 @@ docker exec api-cache-test-mongo mongorestore --host=127.0.0.1 --port=27017 \
   --nsFrom="$source_db.*" --nsTo="$restored_db.*" --stopOnError
 run_phase exercise
 docker exec api-cache-test-mongo rm -- "$archive"
+
+run_service_phase() {
+  docker run --rm --network "$TEST_NETWORK" \
+    -e DB_URL=api-cache-test-mongo -e "DB_NAME=$source_db" \
+    -e RPC_HOST=api-cache-test-rpc \
+    --mount "type=bind,source=$checks_dir,target=/checks,readonly" \
+    --entrypoint python "$API_IMAGE" /checks/service_smoke.py "$1"
+}
+
+service_source="${TEST_DATABASE}_service_source"
+service_restored="${TEST_DATABASE}_service_restored"
+service_archive="/tmp/${TEST_DATABASE}_service.archive.gz"
+docker exec api-cache-test-mongo test ! -e "$service_archive"
+run_service_phase prepare
+docker exec api-cache-test-mongo mongodump --host=127.0.0.1 --port=27017 \
+  --db="$service_source" --numParallelCollections=1 \
+  --excludeCollection=cache_state --excludeCollection=query_cache_v2 \
+  --excludeCollection=request_cache --archive="$service_archive" --gzip
+docker exec api-cache-test-mongo mongorestore --host=127.0.0.1 --port=27017 \
+  --archive="$service_archive" --gzip --nsInclude="$service_source.*" \
+  --nsFrom="$service_source.*" --nsTo="$service_restored.*" --stopOnError
+run_service_phase verify
+docker exec api-cache-test-mongo rm -- "$service_archive"

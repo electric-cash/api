@@ -5,6 +5,7 @@ import pytest
 
 from blockchain.rpc import RPCError
 from db import query_cache
+from db.models import Address, Block
 from test_daemon_cache import daemon
 
 
@@ -38,7 +39,7 @@ def test_shutdown_finishes_current_update_before_exit(
     request, handlers, previous = shutdown_control
     events = []
 
-    def update():
+    def update(**kwargs):
         token = query_cache.begin_update()
         events.append('started')
         request(number)
@@ -80,14 +81,14 @@ def test_shutdown_after_verification_rpc_failure_is_not_acknowledged(
         daemon, monkeypatch, shutdown_control, caplog):
     request, handlers, previous = shutdown_control
 
-    def update():
+    def update(**kwargs):
         token = query_cache.begin_update()
         query_cache.mark_writes_complete(token, 10, 'block-10')
         request()
         raise RPCError('Verification node unavailable')
 
     monkeypatch.setattr(daemon, 'update_blockchain', update)
-    with pytest.raises(RuntimeError, match='unfinished'):
+    with pytest.raises(RuntimeError, match='verification pending'):
         daemon.run()
     assert handlers == previous
     assert query_cache.get_generation() is None
@@ -98,7 +99,7 @@ def test_shutdown_cannot_acknowledge_incomplete_writes(
         daemon, monkeypatch, shutdown_control, caplog):
     request, handlers, previous = shutdown_control
 
-    def update():
+    def update(**kwargs):
         query_cache.begin_update()
         request()
 
@@ -114,7 +115,7 @@ def test_rpc_failure_before_writes_still_retries_without_shutdown(
     request, handlers, previous = shutdown_control
     calls = []
 
-    def update():
+    def update(**kwargs):
         calls.append(True)
         if len(calls) == 1:
             raise RPCError('Temporary node failure')
@@ -138,3 +139,38 @@ def test_fatal_update_error_restores_signal_handlers(
         daemon.run()
     assert handlers == previous
     assert 'quiesced' not in caplog.text.lower()
+
+
+@pytest.mark.parametrize('chunk_size', [1, 2000])
+def test_shutdown_finishes_written_prefix_without_ingesting_the_backlog(
+        daemon, monkeypatch, chunk_size):
+    inserted = []
+    monkeypatch.setattr(daemon, 'MAX_CHUNK_SIZE', chunk_size)
+    monkeypatch.setattr(daemon, 'get_block_count', lambda: 13)
+    monkeypatch.setattr(daemon, 'get_block', lambda height: {
+        'hash': 'block-' + str(height), 'height': height,
+        'previousblockhash': 'block-' + str(height - 1),
+    })
+
+    def insert(block, new, deleted):
+        inserted.append(block['height'])
+        Block(hash=block['hash'], height=block['height'],
+              previousblockhash=block['previousblockhash'], time=1,
+              difficulty=1, insert_time=1, update_time=1).save()
+
+    monkeypatch.setattr(daemon, 'insert_block', insert)
+    monkeypatch.setattr(daemon, 'update_addresses', lambda *args: Address.objects.update(set__balance=9))
+    daemon.update_blockchain(should_stop=lambda: bool(inserted))
+    assert inserted == [11]
+    assert Block.objects.order_by('-height').first().height == 11
+    assert Address.objects.first().balance == 9
+    assert query_cache.get_generation() not in (None, 'initial')
+
+
+def test_shutdown_before_first_write_preserves_existing_generation(daemon, monkeypatch):
+    monkeypatch.setattr(daemon, 'get_block_count', lambda: 13)
+    insert = Mock()
+    monkeypatch.setattr(daemon, 'insert_block', insert)
+    daemon.update_blockchain(should_stop=lambda: True)
+    insert.assert_not_called()
+    assert query_cache.get_generation() == 'initial'

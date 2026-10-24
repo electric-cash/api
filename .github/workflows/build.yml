@@ -60,7 +60,7 @@ jobs:
             --mount "type=bind,source=$RUNNER_TEMP/api-reports,target=/reports" \
             api-cache-tests tests -q --tb=short \
             --junitxml=/reports/junit.xml \
-            --cov=db.query_cache --cov-branch \
+            --cov=db.query_cache --cov=daemon --cov-branch \
             --cov-report=term-missing --cov-report=xml:/reports/coverage.xml \
             --cov-fail-under=80
 

@@ -23,13 +23,27 @@ It is a recovery-mechanism test, not evidence that a production backup exists.
    duplicating balances or changing its generation.
 6. Simulate a conflicting canonical tip. The daemon must invalidate readiness,
    preserve application data, and refuse another unverified restart.
+7. Start the actual `python /app/daemon.py` process against an empty fixture
+   database. Pause the synthetic RPC response after the first block is written,
+   send SIGTERM, and verify the process remains alive until the response is
+   released and the written block/address prefix and verification finish. A
+   further fixture block remains available but must not be fetched after SIGTERM.
+8. Require a successful daemon exit and quiescence acknowledgement, check the
+   known balances/UTXOs, then start real gunicorn and verify HTTP responses.
+9. Dump that completed database and restore to a separate, empty database
+   without cache metadata. Start the full daemon and gunicorn again; verify
+   unchanged application data, correct HTTP responses and cache bypass without
+   fabricating a ready generation when no new blocks arrive.
 
 The interruptions and fork response are controlled test injections. The MongoDB
 server, dump/restore tools, application image, persisted state, and subprocess
 termination are real. This is not production-scale load or live-chain recovery
-validation. Workers import the application's actual `update_analyzer()` and
-`update_blockchain()` functions; they do not test the full `daemon.py` service
-entry point, its continuous polling loop, or the container's service lifecycle.
+validation. The SIGKILL workers import the application's actual
+`update_analyzer()` and `update_blockchain()` functions. The separate
+`service_smoke.py` checks run the normal daemon entry point and gunicorn as
+subprocesses inside the application image. Their synthetic RPC server listens
+only on container loopback. This is process-level lifecycle coverage, not a
+test of Kubernetes termination grace periods or production orchestration.
 
 ## Run it
 
@@ -66,7 +80,9 @@ Its existing teardown removes the disposable database/RPC containers and network
 
 Complete the [component backup and rollout gates](backup-and-rollout.md),
 including a verified writer-quiescence method. This drill does not provide an
-operator pause protocol for the legacy daemon.
+operator pause protocol for the legacy daemon; only the new candidate handles
+graceful shutdown requests. The first transition from the legacy version still
+requires an independently verified consistency/recovery method.
 
 Before a rollout, identify an actual backup, its age, storage location, access
 controls, and restoration procedure. Demonstrate restoration to an isolated

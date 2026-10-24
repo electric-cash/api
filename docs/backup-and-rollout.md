@@ -30,10 +30,18 @@ the archive can be restored.
 
 The daemon writes blocks and UTXOs before finishing the corresponding address
 updates. An interruption between those operations can leave an inconsistent
-application state. It has no operator pause/acknowledgement protocol that proves
+application state. The legacy daemon has no pause/acknowledgement protocol that proves
 a completed ingestion boundary. A stopped process, an idle database sample, a
 matching tip hash or a successful filesystem snapshot does not establish that
 balances and UTXOs are consistent.
+
+The candidate handles SIGTERM/SIGINT by finishing its in-flight block and
+the corresponding address updates, verifying the actual written prefix and
+checking for unfinished cache state before acknowledging quiescence. This does
+not add a shutdown handler to a legacy process already running, certify
+historical data, or exclude other writers. Verify the process exits successfully
+and records acknowledgement, and rehearse the actual termination grace period.
+If it is forcibly killed or exits with unfinished state, use the recovery path.
 
 Do not use `scale 0`, SIGTERM or SIGKILL as the consistency proof. First define
 and rehearse an operator-approved way to stop new work at a completed boundary,

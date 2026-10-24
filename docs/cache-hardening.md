@@ -23,10 +23,25 @@ formats are unchanged.
   detected inconsistency still requires verified recovery.
 - A lagging or temporarily unavailable node is retried at the polling interval;
   it is not treated as a confirmed reorg. RPC calls have connection/read timeouts.
+- SIGTERM/SIGINT request shutdown at the next block boundary. The daemon finishes
+  the in-flight block, applies address updates for the written prefix, verifies
+  its actual tip and stops without ingesting the rest of the backlog or warming
+  statistics caches. It checks for unfinished state before acknowledging quiescence.
+  A fatal error, unresolved verification or forced kill is not a clean shutdown.
 - Cache read/write failures fall back to the underlying query. Ingestion-state
   write failures propagate rather than silently certifying incomplete data.
 
 The legacy cache is not migrated or deleted. Its cleanup is separate maintenance.
+
+Shutdown acknowledgement applies only to this candidate, not an already running
+legacy image. It proves that this process has no unfinished ingestion, not that
+historical data or other writers are consistent. The deployment's termination
+grace period must accommodate the in-flight block and its address updates and
+verification, including slow RPC and database operations; this patch does not
+change any production grace period or authorize stopping a writer.
+If writes completed but RPC verification remains pending, shutdown fails without
+acknowledgement and reports that restart will retry verification. This is distinct
+from an interrupted write that requires independently verified recovery.
 
 ## Compatibility and limitations
 

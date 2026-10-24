@@ -7,6 +7,7 @@ from mongobackup import backup
 from mongoengine import connect
 from blockchain.rpc import RPCError, get_block, get_block_count, get_block_hash
 from db import query_cache
+import signal
 import logging, shutil, sys, time
 
 # logging.basicConfig(level=logging.DEBUG, filename="daemon.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
@@ -135,7 +136,10 @@ def _verify_completed_update(height, block_hash):
         query_cache.invalidate()
         raise RuntimeError('Stored tip changed before canonical verification; verified recovery required')
     
-def update_blockchain():
+def update_blockchain(should_stop=None):
+    if should_stop is None:
+        should_stop = lambda: False
+
     def _reexecute_queries():
         analyzer.piechart_data(100, 1, analyzer.max_block_number())
         periods = ['week', 'month', 'all']
@@ -148,7 +152,8 @@ def update_blockchain():
     if pending is not None:
         _verify_completed_update(pending.verification_height, pending.verification_hash)
         query_cache.complete_update(pending.generation)
-        _reexecute_queries()
+        if not should_stop():
+            _reexecute_queries()
         return
 
     query_cache.assert_no_pending_update()
@@ -159,6 +164,7 @@ def update_blockchain():
         return
 
     generation = None
+    last_written_height = None
     previous_hash = tip.hash if tip is not None else None
     chunk_size = end_block_number - start_block_number
     iterations = chunk_size // MAX_CHUNK_SIZE + 1
@@ -171,8 +177,11 @@ def update_blockchain():
             del_utxos = {}
             new_start_block_number = start_block_number + i * MAX_CHUNK_SIZE
             new_end_block_number = min(new_start_block_number + MAX_CHUNK_SIZE, end_block_number)
+            processed = 0
             
             for idx in range(new_start_block_number, new_end_block_number):
+                if should_stop():
+                    break
                 logging.debug("Processing block = {}".format(idx))
 #                 backup = backup or idx % BACKUP_INTERVAL == 0
                 
@@ -187,15 +196,21 @@ def update_blockchain():
                 if generation is None:
                     generation = query_cache.begin_update()
                 insert_block(block, n_utxos, d_utxos)
+                last_written_height = idx
+                processed += 1
                 previous_hash = block['hash']
                 new_utxos = {**new_utxos, **n_utxos}
                 del_utxos = {**del_utxos, **d_utxos}
                 update_analyzer()
                 
+            if processed == 0 and should_stop():
+                break
             if start_block_number > 0:
                 check_reorg(min(chunk_size, MAX_CHUNK_SIZE))
             
             update_addresses(new_utxos, del_utxos)
+            if should_stop():
+                break
 
 #         if backup:
 #             backup_db()
@@ -203,10 +218,13 @@ def update_blockchain():
         logging.error(e)
         raise
     
-    query_cache.mark_writes_complete(generation, end_block_number - 1, previous_hash)
-    _verify_completed_update(end_block_number - 1, previous_hash)
+    if generation is None:
+        return
+    query_cache.mark_writes_complete(generation, last_written_height, previous_hash)
+    _verify_completed_update(last_written_height, previous_hash)
     query_cache.complete_update(generation)
-    _reexecute_queries()
+    if not should_stop():
+        _reexecute_queries()
 
 def init_cleanup():
     shutil.rmtree('/tmp/mongo_dump_backup', True)
@@ -221,17 +239,36 @@ def try_to_connect():
     
 def run():
 #     init_cleanup()
-    try_to_connect()
+    stop_requested = False
+
+    def request_stop(signum, frame):
+        nonlocal stop_requested
+        # Do not interrupt block and address writes halfway through a batch.
+        stop_requested = True
+
+    previous_handlers = {}
+    try:
+        for signum in (signal.SIGTERM, signal.SIGINT):
+            previous_handlers[signum] = signal.signal(signum, request_stop)
+        try_to_connect()
 #     restore_db()
-    update_analyzer()
-    while True:
-        try:
-            update_blockchain()
-        except RPCError as error:
-            if query_cache.get_pending_verification() is None:
-                query_cache.assert_no_pending_update()
-            logging.warning('%s; retrying after the polling interval', error)
-        time.sleep(5)
+        update_analyzer()
+        while not stop_requested:
+            try:
+                update_blockchain(should_stop=lambda: stop_requested)
+            except RPCError as error:
+                if query_cache.get_pending_verification() is None:
+                    query_cache.assert_no_pending_update()
+                logging.warning('%s; retrying after the polling interval', error)
+            if not stop_requested:
+                time.sleep(5)
+        if query_cache.get_pending_verification() is not None:
+            raise RuntimeError('Shutdown with canonical verification pending; restart retries verification')
+        query_cache.assert_no_pending_update()
+        logging.info('Daemon quiesced; no ingestion is in progress (historical data not audited)')
+    finally:
+        for signum, handler in previous_handlers.items():
+            signal.signal(signum, handler)
 
 
 if __name__ == '__main__':
