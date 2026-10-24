@@ -1,21 +1,46 @@
 """Exercise a locally built, unmodified gunicorn image against synthetic data."""
 import json
 import os
+import re
 import time
 from urllib.parse import urlsplit
 
-import requests
-from pymongo import MongoClient
+
+def validate_environment(values):
+    uri = values.get('TEST_MONGODB_URI', '')
+    api = values.get('TEST_API_URL', '')
+    name = values.get('TEST_DATABASE', '')
+    message = 'HTTP smoke requires isolated local services and a fixture database'
+    try:
+        mongo = urlsplit(uri)
+        http = urlsplit(api)
+        host = http.hostname or ''
+        port = http.port
+        allowed = (
+            re.fullmatch(r'api_cache_http_[A-Za-z0-9_]+', name) is not None and
+            len(name) <= 63 and
+            mongo.scheme == 'mongodb' and
+            mongo.netloc in ('api-cache-test-mongo', 'api-cache-test-mongo:27017') and
+            mongo.path in ('', '/') and
+            http.scheme == 'http' and
+            re.fullmatch(r'api-cache-smoke-[a-z0-9](?:[a-z0-9-]*[a-z0-9])?', host) is not None and
+            len(host) <= 63 and
+            (port is None or 1 <= port <= 65535) and
+            http.netloc == host + (':' + str(port) if port is not None else '') and
+            http.path in ('', '/') and
+            not any(character.isspace() or ord(character) < 32 or
+                    ord(character) == 127 or character in '?#' for character in uri + api))
+    except ValueError:
+        raise RuntimeError(message) from None
+    if not allowed:
+        raise RuntimeError(message)
+    return uri, api.rstrip('/'), name
 
 
 def main():
-    uri = os.environ['TEST_MONGODB_URI']
-    api = os.environ['TEST_API_URL']
-    name = os.environ['TEST_DATABASE']
-    if (urlsplit(uri).hostname != 'api-cache-test-mongo' or
-            not urlsplit(api).hostname.startswith('api-cache-smoke-') or
-            not name.startswith('api_cache_http_')):
-        raise RuntimeError('Smoke tests require disposable local services')
+    uri, api, name = validate_environment(os.environ)
+    import requests
+    from pymongo import MongoClient
 
     client = MongoClient(uri, serverSelectionTimeoutMS=5000)
     database = client[name]

@@ -193,8 +193,51 @@ state using the new image and the approved database configuration, before
 starting an old daemon:
 
 ```bash
-python -c 'from mongoengine import connect; from db.db import get_db_uri; from db.query_cache import invalidate; connect(host=get_db_uri()); invalidate()'
+python - <<'PY'
+import json
+import os
+from mongoengine import connect
+from mongoengine.connection import get_db
+from db.db import get_db_uri
+from db.models import CacheState
+from db.query_cache import invalidate
+from pymongo.uri_parser import parse_uri
+
+expected_name = os.environ['EXPECTED_DB_NAME']
+expected_host = os.environ['EXPECTED_DB_HOST']
+expected_port = os.environ['EXPECTED_DB_PORT']
+expected_protocol = os.environ['EXPECTED_DB_PROTOCOL']
+expected_replica_set = os.environ['EXPECTED_REPLICA_SET']
+if (not all((expected_name, expected_host, expected_port, expected_protocol)) or
+        os.environ['DB_NAME'] != expected_name or
+        os.environ['DB_URL'] != expected_host or
+        os.environ.get('DB_PORT', '27017') != expected_port or
+        os.environ.get('DB_PROTOCOL', 'mongodb') != expected_protocol):
+    raise SystemExit('Database identity does not match the approved rollback target')
+uri = get_db_uri(primary_reads=True)
+if parse_uri(uri)['options'].get('replicaSet', '') != expected_replica_set:
+    raise SystemExit('Replica-set selection does not match the approved rollback target')
+connect(host=uri)
+database = get_db()
+if database.name != expected_name:
+    raise SystemExit('Connected database does not match the approved rollback target')
+invalidate()
+state = CacheState.objects.get(id='blockchain')
+if state.ready is not False or state.writes_complete is not False:
+    raise SystemExit('Cache invalidation could not be confirmed; do not restart the old daemon')
+print(json.dumps({'database': database.name, 'server': database.client.address,
+                  'ready': state.ready,
+                  'writes_complete': state.writes_complete}))
+PY
 ```
+
+Set all `EXPECTED_*` values from the independently recorded, approved target;
+use an explicitly empty `EXPECTED_REPLICA_SET` for a standalone target. Do not
+derive these values automatically from the container defaults.
+The command deliberately refuses missing or mismatched database settings. Check
+the printed database name and disabled state against that record before
+continuing. It must run in the selected environment with the selected writers
+already stopped, not as part of the synthetic test drill.
 
 This rotates the generation and clears the completed-write marker. If it fails,
 stop the rollback rather than starting the old daemon. On a later re-upgrade,
@@ -205,3 +248,31 @@ removing the disabled marker. Do not reuse a ready generation across rollback.
 daemon does not invalidate generations and could leave cached results stale.
 The previous code ignores the new collections but also lacks these safety
 guards. Do not roll back merely to bypass a known data-integrity failure.
+
+## Remaining availability and shutdown limits
+
+RPC input proofs are resolved before a block's first write. If a classified RPC
+failure prevents the next block from starting, the daemon finishes address
+updates and canonical verification of the written prefix before retrying that
+next block. Failed database writes remain fail-stop; the daemon does not replay
+an uncertain partial block. Its connection enforces primary reads even when the
+API URI requests secondary reads. Historical linkage is checked before new
+application writes, not after them.
+
+A detected canonical-chain conflict still disables readiness and requires
+verified recovery. No fixed confirmation delay, automatic reorg rollback or
+automatic restore has been introduced. Changing that policy needs separate
+validation of explorer/API freshness and recovery semantics.
+
+With readiness absent or disabled, the API bypasses the cache and can repeatedly
+run expensive full-chain aggregations. This may amplify shared-database load
+until recovery. Do not treat bypass as a bounded-load or safe-data guarantee;
+verify the environment's request/concurrency limits and observation/abort plan
+before rollout. Do not serve a stale generation just to hide the failure.
+
+Graceful shutdown finishes the current block and address updates for the
+written chunk; its duration is not bounded to the default container or
+Kubernetes grace period. Rehearse the actual catch-up workload, RPC timeouts and
+termination settings before relying on acknowledgement. A forced kill or
+unfinished acknowledgement fails the consistency gate; increasing a timeout
+without measurement is not proof of safe shutdown.

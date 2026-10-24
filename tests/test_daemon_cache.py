@@ -28,7 +28,8 @@ def test_successful_sync_publishes_only_after_address_update(daemon, monkeypatch
         'previousblockhash': 'block-' + str(height - 1),
     })
 
-    def insert(block, new, deleted):
+    def insert(block, new, deleted, before_write):
+        before_write()
         assert query_cache.get_generation() is None
         Block(hash=block['hash'], previousblockhash='block-10', height=11, time=1, difficulty=1,
               insert_time=1, update_time=1).save()
@@ -50,7 +51,7 @@ def test_failed_address_update_leaves_cache_disabled(daemon, monkeypatch):
         'hash': 'block-' + str(height), 'height': height,
         'previousblockhash': 'block-' + str(height - 1),
     })
-    monkeypatch.setattr(daemon, 'insert_block', lambda *args: None)
+    monkeypatch.setattr(daemon, 'insert_block', lambda *args, before_write: before_write())
     monkeypatch.setattr(daemon, 'update_addresses', Mock(side_effect=RuntimeError('write failed')))
     with pytest.raises(RuntimeError, match='write failed'):
         daemon.update_blockchain()
@@ -77,7 +78,8 @@ def test_reorg_during_sync_does_not_publish(daemon, monkeypatch):
         'hash': 'block-11', 'height': height, 'previousblockhash': 'block-10',
     })
 
-    def insert(block, new, deleted):
+    def insert(block, new, deleted, before_write):
+        before_write()
         Block(hash='block-11', previousblockhash='block-10', height=11, time=1, difficulty=1,
               insert_time=1, update_time=1).save()
 
