@@ -21,20 +21,21 @@ image="$ECR_REGISTRY/$ECR_REPOSITORY"
 docker tag "$BUILD_NAME" "$image:$IMAGE_TAG"
 docker push "$image:$IMAGE_TAG"
 
-# Docker records repository digests after push; ignore other registry aliases.
-references=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$image:$IMAGE_TAG")
-digest=''
-while IFS= read -r reference; do
-  if [[ "$reference" == "$image@sha256:"* ]]; then
-    digest=${reference#"$image@"}
-  fi
-done <<< "$references"
+# Read the registry manifest rather than relying on local Docker metadata.
+manifest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$image:$IMAGE_TAG")
+digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])' <<< "$manifest")
 if [[ ! "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-  echo "Push completed but no matching repository digest was recorded" >&2
+  echo "Push completed but the registry digest could not be verified" >&2
   exit 1
 fi
 printf -- '- Published `%s:%s` as `%s@%s`\n' "$image" "$IMAGE_TAG" "$image" "$digest" >> "$GITHUB_STEP_SUMMARY"
 
 docker tag "$BUILD_NAME" "$image:latest"
 docker push "$image:latest"
-printf -- '- Updated `%s:latest` from source `%s`\n' "$image" "$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"
+manifest=$(docker buildx imagetools inspect --format '{{json .Manifest}}' "$image:latest")
+latest_digest=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["digest"])' <<< "$manifest")
+if [[ "$latest_digest" != "$digest" ]]; then
+  echo "Registry latest digest does not match the published source SHA digest" >&2
+  exit 1
+fi
+printf -- '- Verified `%s:latest` as `%s@%s` from source `%s`\n' "$image" "$image" "$digest" "$IMAGE_TAG" >> "$GITHUB_STEP_SUMMARY"

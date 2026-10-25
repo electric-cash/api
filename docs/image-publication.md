@@ -7,7 +7,9 @@ not needed for this workflow. Repository branch protections are unchanged.
 
 The image is built once, labeled with its source SHA, and checked with
 `pip check` before cloud credentials are configured. This is not a replacement
-for the pull-request regression, HTTP and recovery tests.
+for the pull-request regression, HTTP and recovery tests. PR candidate-image
+archives are diagnostic artifacts, not a promotion source: release builds the
+merged master commit again. Test the actual published artifact before rollout.
 
 ## Registry contract
 
@@ -21,12 +23,16 @@ The three existing destinations remain in order:
 
 Each credential pair selects its default private ECR registry. The workflow
 does not provision repositories or grant IAM access. Existing credentials must
-still permit ECR login and pushing to the `api` repository; their validity can
+still permit ECR login, pushing and reading manifests (`ecr:BatchGetImage`) in
+the `api` repository; their validity can
 only be established by a successful authorized publication.
 
+All three logins complete before the first push; this detects authentication
+failures early but does not prove repository-level read/write permissions.
 Each destination receives the full commit-SHA tag followed by `latest` for
-backward compatibility. The job summary records the repository digest reported
-by Docker after the SHA push, before attempting the mutable alias. Publication
+backward compatibility. Docker Buildx reads each digest from the registry;
+the job summary records the verified SHA digest before attempting the mutable
+alias, then checks that `latest` resolves to the same digest. Publication
 stops at the first error; it is not atomic across tags or registries. Inspect
 the failed step, logs and summary to identify partial publication. Missing a
 receipt is not proof that nothing was uploaded, for example if the runner lost
