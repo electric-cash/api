@@ -48,6 +48,7 @@ jobs:
 
       - name: Test image publication without cloud access
         run: |
+          DOCKER_CONFIG="$RUNNER_TEMP/ecr-test" docker buildx version
           docker run --rm --network none \
             --mount "type=bind,source=$PWD,target=/work,readonly" \
             --entrypoint python api-cache-tests \

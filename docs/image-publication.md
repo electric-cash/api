@@ -29,6 +29,8 @@ only be established by a successful authorized publication.
 
 All three logins complete before the first push; this detects authentication
 failures early but does not prove repository-level read/write permissions.
+Each credential slot uses a separate temporary Docker configuration, so logins
+cannot overwrite one another even if two slots resolve to the same registry.
 Each destination receives the full commit-SHA tag followed by `latest` for
 backward compatibility. Docker Buildx reads each digest from the registry;
 the job summary records the verified SHA digest before attempting the mutable

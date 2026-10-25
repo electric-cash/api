@@ -91,6 +91,10 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.assertTrue(credentials.get('uses', '').startswith(
                 'aws-actions/configure-aws-credentials@'))
             self.assertEqual(credentials['with'].get('unset-current-credentials'), 'true')
+            publish = next(item for item in self.steps if item.get('env', {}).get(
+                'ECR_REGISTRY') == '${{ steps.%s.outputs.registry }}' % step['id'])
+            self.assertEqual(step['env']['DOCKER_CONFIG'], publish['env']['DOCKER_CONFIG'])
+        self.assertEqual(len({step['env']['DOCKER_CONFIG'] for _, step in logins}), 3)
         first_publish = next(i for i, step in enumerate(self.steps)
                              if step.get('run') == 'bash .github/scripts/publish-image.sh')
         self.assertLess(logins[-1][0], first_publish)

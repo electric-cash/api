@@ -49,6 +49,8 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-1
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -61,6 +63,8 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr-2
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-2
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -73,18 +77,23 @@ jobs:
       - name: Login to Amazon ECR
         id: login-ecr-3
         uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-3
 
       - name: Publish to first registry
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-1
         run: bash .github/scripts/publish-image.sh
 
       - name: Publish to second registry
         env:
           ECR_REGISTRY: ${{ steps.login-ecr-2.outputs.registry }}
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-2
         run: bash .github/scripts/publish-image.sh
 
-      - name: Tag, and push image to Amazon ECR
+      - name: Publish to third registry
         env:
           ECR_REGISTRY: ${{ steps.login-ecr-3.outputs.registry }}
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-3
         run: bash .github/scripts/publish-image.sh
