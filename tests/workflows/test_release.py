@@ -82,6 +82,19 @@ class ReleaseWorkflowTests(unittest.TestCase):
         })
         self.assertLessEqual(int(self.job['timeout-minutes']), 30)
 
+    def test_all_credentials_and_logins_are_checked_before_any_push(self):
+        logins = [(i, step) for i, step in enumerate(self.steps)
+                  if step.get('uses', '').startswith('aws-actions/amazon-ecr-login@')]
+        self.assertEqual(len(logins), 3)
+        for index, step in logins:
+            credentials = self.steps[index - 1]
+            self.assertTrue(credentials.get('uses', '').startswith(
+                'aws-actions/configure-aws-credentials@'))
+            self.assertEqual(credentials['with'].get('unset-current-credentials'), 'true')
+        first_publish = next(i for i, step in enumerate(self.steps)
+                             if step.get('run') == 'bash .github/scripts/publish-image.sh')
+        self.assertLess(logins[-1][0], first_publish)
+
 
 FAKE_DOCKER = '''#!/usr/bin/env python3
 import json
@@ -98,8 +111,13 @@ if sys.argv[1:3] == ['image', 'inspect']:
     if '.Config.Labels' in sys.argv[4]:
         print(os.environ['MOCK_REVISION'])
     else:
-        print('another.invalid/api@sha256:' + 'c' * 64)
-        print(os.environ['MOCK_DIGEST'])
+        print('example.invalid/api@' + os.environ['MOCK_DIGEST'])
+elif sys.argv[1:4] == ['buildx', 'imagetools', 'inspect']:
+    if 'MOCK_MANIFEST' in os.environ:
+        print(os.environ['MOCK_MANIFEST'])
+    else:
+        key = 'MOCK_LATEST_DIGEST' if sys.argv[-1].endswith(':latest') else 'MOCK_DIGEST'
+        print(json.dumps({'digest': os.environ[key]}))
 '''
 
 
@@ -116,7 +134,7 @@ class PublicationScriptTests(unittest.TestCase):
                        DOCKER_CALLS=str(log), GITHUB_STEP_SUMMARY=str(summary),
                        ECR_REGISTRY='example.invalid', ECR_REPOSITORY='api',
                        IMAGE_TAG=SHA, BUILD_NAME='candidate', MOCK_REVISION=SHA,
-                       MOCK_DIGEST=IMAGE + '@' + DIGEST)
+                       MOCK_DIGEST=DIGEST, MOCK_LATEST_DIGEST=DIGEST)
             env.update(overrides)
             result = subprocess.run(
                 ['bash', '.github/scripts/publish-image.sh'], cwd=str(ROOT),
@@ -139,6 +157,9 @@ class PublicationScriptTests(unittest.TestCase):
         self.assertIn(IMAGE + '@' + DIGEST, summary)
         self.assertIn(SHA, summary)
         self.assertIn('latest', summary)
+        self.assertEqual([call[-1] for call in calls if call[0] == 'buildx'],
+                         [IMAGE + ':' + SHA, IMAGE + ':latest'])
+        self.assertEqual(summary.count(DIGEST), 2)
 
     def test_wrong_revision_is_rejected_before_tag_or_push(self):
         result, calls, summary = self.run_publication(MOCK_REVISION='old')
@@ -154,7 +175,7 @@ class PublicationScriptTests(unittest.TestCase):
                 self.assertEqual(calls, [])
 
     def test_each_docker_failure_stops_remaining_commands(self):
-        for failure in range(1, 7):
+        for failure in range(1, 8):
             with self.subTest(failure=failure):
                 result, calls, summary = self.run_publication(FAIL_AT=str(failure))
                 self.assertEqual(result.returncode, 42, result.stderr)
@@ -165,13 +186,27 @@ class PublicationScriptTests(unittest.TestCase):
                     self.assertIn(IMAGE + '@' + DIGEST, summary)
                     self.assertNotIn('latest', summary)
 
-    def test_missing_or_invalid_matching_digest_does_not_publish_latest(self):
-        for value in ('', IMAGE + '@sha256:bad', 'other.invalid/api@' + DIGEST):
+    def test_missing_or_invalid_digest_does_not_publish_latest(self):
+        for value in ('', 'sha256:bad', 'x' * 64):
             with self.subTest(value=value):
                 result, calls, summary = self.run_publication(MOCK_DIGEST=value)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual([call for call in calls if call[0] == 'push'],
                                  [['push', IMAGE + ':' + SHA]])
+                self.assertEqual(summary, '')
+
+    def test_latest_digest_must_match_sha_digest(self):
+        result, _, summary = self.run_publication(MOCK_LATEST_DIGEST='sha256:' + 'c' * 64)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(IMAGE + '@' + DIGEST, summary)
+        self.assertNotIn('latest', summary)
+
+    def test_malformed_registry_manifest_is_not_success(self):
+        for value in ('not-json', '{}', '{"digest": null}'):
+            with self.subTest(value=value):
+                result, calls, summary = self.run_publication(MOCK_MANIFEST=value)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(len(calls), 4)
                 self.assertEqual(summary, '')
 
 
