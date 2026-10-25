@@ -33,6 +33,10 @@ formats are unchanged.
 
 The legacy cache is not migrated or deleted. Its cleanup is separate maintenance.
 
+The [difficulty chart query](difficulty-query.md) also declares a covering index
+on block height and difficulty. Its build and query-plan verification are a
+separate deployment gate; first collection access can create declared indexes.
+
 Shutdown acknowledgement applies only to this candidate, not an already running
 legacy image. It proves that this process has no unfinished ingestion, not that
 historical data or other writers are consistent. The deployment's termination
