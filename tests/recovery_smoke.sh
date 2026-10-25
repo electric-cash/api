@@ -1,0 +1,75 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+: "${TEST_DATABASE:?Set a disposable api_cache_http_ fixture prefix}"
+TEST_NETWORK="${TEST_NETWORK:-api-cache-ci}"
+API_IMAGE="${API_IMAGE:-api-candidate}"
+if [[ ! "$TEST_DATABASE" =~ ^api_cache_http_[A-Za-z0-9_]+$ ]] ||
+   (( ${#TEST_DATABASE} + 18 > 63 )); then
+  echo 'Recovery drill requires a short disposable fixture prefix' >&2
+  exit 1
+fi
+if [[ "$(docker network inspect "$TEST_NETWORK" --format '{{.Internal}}')" != true ]]; then
+  echo 'Recovery drill requires an internal Docker network' >&2
+  exit 1
+fi
+for container in api-cache-test-mongo api-cache-test-rpc; do
+  if [[ -z "$(docker inspect "$container" --format "{{with index .NetworkSettings.Networks \"$TEST_NETWORK\"}}{{.NetworkID}}{{end}}")" ]] ||
+     [[ "$(docker inspect "$container" --format '{{len .NetworkSettings.Networks}}')" != 1 ]] ||
+     [[ "$(docker inspect "$container" --format '{{.HostConfig.PublishAllPorts}}')" != false ]] ||
+     [[ "$(docker inspect "$container" --format '{{len .HostConfig.PortBindings}}')" != 0 ]]; then
+    echo 'Fixture containers must use only the isolated network and publish no ports' >&2
+    exit 1
+  fi
+done
+
+checks_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+if command -v cygpath >/dev/null 2>&1; then
+  checks_dir="$(cygpath -w "$checks_dir")"
+  export MSYS_NO_PATHCONV=1
+fi
+source_db="${TEST_DATABASE}_recovery_source"
+restored_db="${TEST_DATABASE}_recovery_restored"
+archive="/tmp/${TEST_DATABASE}_recovery.archive.gz"
+docker exec api-cache-test-mongo test ! -e "$archive"
+run_phase() {
+  docker run --rm --network "$TEST_NETWORK" \
+    -e DB_URL=api-cache-test-mongo -e "DB_NAME=$source_db" \
+    -e RPC_HOST=api-cache-test-rpc \
+    --mount "type=bind,source=$checks_dir,target=/checks,readonly" \
+    --entrypoint python "$API_IMAGE" /checks/recovery_smoke.py "$1"
+}
+
+run_phase prepare
+docker exec api-cache-test-mongo mongodump --host=127.0.0.1 --port=27017 \
+  --db="$source_db" --excludeCollection=cache_state \
+  --excludeCollection=query_cache_v2 --excludeCollection=request_cache \
+  --archive="$archive" --gzip
+docker exec api-cache-test-mongo mongorestore --host=127.0.0.1 --port=27017 \
+  --archive="$archive" --gzip --nsInclude="$source_db.*" \
+  --nsFrom="$source_db.*" --nsTo="$restored_db.*" --stopOnError
+run_phase exercise
+docker exec api-cache-test-mongo rm -- "$archive"
+
+run_service_phase() {
+  docker run --rm --network "$TEST_NETWORK" \
+    -e DB_URL=api-cache-test-mongo -e "DB_NAME=$source_db" \
+    -e RPC_HOST=api-cache-test-rpc \
+    --mount "type=bind,source=$checks_dir,target=/checks,readonly" \
+    --entrypoint python "$API_IMAGE" /checks/service_smoke.py "$1"
+}
+
+service_source="${TEST_DATABASE}_service_source"
+service_restored="${TEST_DATABASE}_service_restored"
+service_archive="/tmp/${TEST_DATABASE}_service.archive.gz"
+docker exec api-cache-test-mongo test ! -e "$service_archive"
+run_service_phase prepare
+docker exec api-cache-test-mongo mongodump --host=127.0.0.1 --port=27017 \
+  --db="$service_source" --numParallelCollections=1 \
+  --excludeCollection=cache_state --excludeCollection=query_cache_v2 \
+  --excludeCollection=request_cache --archive="$service_archive" --gzip
+docker exec api-cache-test-mongo mongorestore --host=127.0.0.1 --port=27017 \
+  --archive="$service_archive" --gzip --nsInclude="$service_source.*" \
+  --nsFrom="$service_source.*" --nsTo="$service_restored.*" --stopOnError
+run_service_phase verify
+docker exec api-cache-test-mongo rm -- "$service_archive"

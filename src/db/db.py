@@ -1,11 +1,13 @@
 from datetime import datetime
 from db.db_utils import create_address, create_block, create_utxo, set_insert_or_update_time
 from db import db_queries
+from db import query_cache
 from db.models import Address, Block, RequestCache, UTXO
 from mongoengine import Document
 from mongoengine.errors import NotUniqueError
 from pymongo.errors import OperationFailure
-from blockchain.rpc import get_block, get_block_count
+from urllib.parse import parse_qsl
+from blockchain.rpc import RPCError, get_block, get_block_count, get_raw_transaction
 import json, logging, os
 # logging.basicConfig(level=logging.DEBUG, filename="blockchain.log", format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%d-%m-%Y %H:%M:%S')
 logging.basicConfig(
@@ -25,12 +27,22 @@ db_user = os.getenv('DB_USERNAME', '')
 db_pass = os.getenv('DB_PASSWORD', '')
 db_para = os.getenv('DB_URI_PARAMS', '')
 
-def get_db_uri():
+def get_db_uri(primary_reads=False):
     uri = db_prot + '://'
     if db_user != '' and db_pass != '':
         uri += db_user + ':' + db_pass + '@'
     uri += db_host + ':' + db_port + '/' + db_name
-    if db_para != '':
+    if primary_reads:
+        options = []
+        for option in db_para.lstrip('?').split('&'):
+            parsed = parse_qsl(option, keep_blank_values=True)
+            if parsed and parsed[0][0].lower() not in (
+                    'readpreference', 'readpreferencetags', 'maxstalenessseconds'):
+                # Some legacy PyMongo options require their opaque value unchanged.
+                options.append(option)
+        options.append('readPreference=primary')
+        uri += '?' + '&'.join(options)
+    elif db_para != '':
         uri += db_para
     return uri
 
@@ -56,6 +68,7 @@ def get_highest_block_number_in_db():
         return -1
   
 def drop_db():
+    query_cache.invalidate()
     Block.drop_collection()
     Address.drop_collection()
     UTXO.drop_collection()
@@ -70,12 +83,40 @@ def insert_address(address):
             logging.debug('Added address(' + str(address.hash) + ') to database')
         except NotUniqueError as e:
             logging.warn(e)
+            raise
     elif query_set[0].to_mongo() != address.to_mongo():
         set_insert_or_update_time(address, False)
         query_set.update(balance=address.balance, txs=address.txs, update_time=address.update_time)
         logging.debug('Updated address(' + str(address.hash) + ') in database')
          
-def insert_block(block, new_utxos, del_utxos):
+def insert_block(block, new_utxos, del_utxos, before_write=None):
+    previous_transactions = {}
+    untracked_inputs = set()
+
+    def _is_untracked_output(txid, output_number):
+        if txid not in previous_transactions:
+            previous_transactions[txid] = get_raw_transaction(txid)
+        transaction = previous_transactions[txid]
+        if not isinstance(transaction, dict) or transaction.get('txid') != txid:
+            raise RPCError('RPC could not verify the missing input transaction')
+        outputs = transaction.get('vout')
+        if not isinstance(outputs, list):
+            raise RPCError('RPC returned invalid previous outputs')
+        matches = [output for output in outputs
+                   if isinstance(output, dict) and output.get('n') == output_number]
+        if len(matches) != 1:
+            raise RPCError('RPC could not verify the missing previous output')
+        script = matches[0].get('scriptPubKey')
+        if not isinstance(script, dict):
+            raise RPCError('RPC returned an invalid previous output script')
+        if script.get('addresses') or 'address' in script:
+            return False
+        if (not isinstance(script.get('addresses', []), list) or
+                not isinstance(script.get('hex'), str) or
+                not isinstance(script.get('type'), str) or not script['type']):
+            raise RPCError('RPC did not prove the previous output was untracked')
+        return True
+
     def _parse_inputs(txid, vin, utxo, new_utxo, del_utxo):
         for inp in vin:
             if 'coinbase' in inp:
@@ -83,8 +124,14 @@ def insert_block(block, new_utxos, del_utxos):
             in_txid = inp.txid
             in_vout = inp.vout
             tx_key = in_txid + str(in_vout)
-            try: 
+            try:
                 db_utxo = utxo.get(id=tx_key)
+            except UTXO.DoesNotExist:
+                if tx_key in untracked_inputs:
+                    logging.info('Skipping verified untracked input %s:%s', in_txid, in_vout)
+                    continue
+                raise
+            try:
                 if db_utxo.id in new_utxo:
                     del new_utxo[db_utxo.id]
                 else:
@@ -93,6 +140,7 @@ def insert_block(block, new_utxos, del_utxos):
                 logging.debug('Deleted utxo: ' + db_utxo.to_json())
             except Exception as e:
                 logging.warn(e)
+                raise
             
     def _parse_outputs(txid, vout, utxo, new_utxo, del_utxo):
         for out in vout:
@@ -115,6 +163,7 @@ def insert_block(block, new_utxos, del_utxos):
                     logging.debug('Added utxo: ' + db_utxo.to_json())
                 except NotUniqueError as e:
                     logging.warn(e)
+                    raise
             if not get_address(out_addr):
                 address = create_address(out_addr, 0)
                 insert_address(address)
@@ -129,6 +178,26 @@ def insert_block(block, new_utxos, del_utxos):
         return
     
     db_block = create_block(block)
+    # Resolve all RPC-dependent input proofs before the first persisted change.
+    outputs_in_block = {}
+    utxo = get_utxos()
+    for tx in db_block.tx:
+        for inp in tx.vin:
+            if 'coinbase' in inp:
+                continue
+            key = inp.txid + str(inp.vout)
+            if key in outputs_in_block:
+                if not outputs_in_block[key]:
+                    untracked_inputs.add(key)
+            elif not utxo(id=key):
+                if not _is_untracked_output(inp.txid, inp.vout):
+                    query_cache.invalidate()
+                    raise UTXO.DoesNotExist('Tracked input is missing from the application database')
+                untracked_inputs.add(key)
+        for out in tx.vout:
+            outputs_in_block[tx.txid + str(out.n)] = bool(out.scriptPubKey.addresses)
+    if before_write is not None:
+        before_write()
     _before_insert_block(db_block, new_utxos, del_utxos)
     set_insert_or_update_time(db_block)
     try:
@@ -136,28 +205,9 @@ def insert_block(block, new_utxos, del_utxos):
         logging.debug('Added block(' + str(db_block.height) + ') to database')
     except NotUniqueError as e:
         logging.warn(e)
+        raise
 
 def execute_query(pipeline, collection, **kwargs):
-    def _get_from_cache_if_exists(type, params):
-        cache = get_cache()
-        results = cache.filter(type=type, params=params)
-        
-        if results.count() != 1:
-            logging.warn('Invalid number of cached results: {0}'.format(results.count()))
-            return None
-        results.first().update(last_accessed=get_highest_block_number_in_db())
-        return results.first().result
-    
-    def _cache_and_return_query_result(type, params, pipeline, collection):
-        def _cache_request_result(type, params, result):
-            json_cache = json.dumps({'type':type, 'params':params, 'result':result, 'last_accessed':get_highest_block_number_in_db()})
-            cache = RequestCache.from_json(json_cache)
-            cache.save()
-            
-        result = list(collection.aggregate(*pipeline))
-        _cache_request_result(type, params, result)
-        return result
-    
     if not collection or collection == None:
         if 'default' in kwargs:
             return kwargs['default']
@@ -167,10 +217,7 @@ def execute_query(pipeline, collection, **kwargs):
         if 'type' not in kwargs or 'params' not in kwargs:
             return list(collection.aggregate(*pipeline))
     
-        result = _get_from_cache_if_exists(kwargs['type'], kwargs['params'])
-        if result:
-            return result
-        return _cache_and_return_query_result(kwargs['type'], kwargs['params'], pipeline, collection)
+        return query_cache.execute(pipeline, collection, kwargs['type'], kwargs['params'])
     except OperationFailure as e:
         if 'default' in kwargs:
             return kwargs['default']
