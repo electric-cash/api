@@ -46,6 +46,13 @@ jobs:
           docker build --build-arg "PYTHON_VERSION=$TEST_PYTHON" -f tests/Dockerfile -t api-cache-tests .
           mkdir -p "$RUNNER_TEMP/api-reports"
 
+      - name: Test image publication without cloud access
+        run: |
+          docker run --rm --network none \
+            --mount "type=bind,source=$PWD,target=/work,readonly" \
+            --entrypoint python api-cache-tests \
+            -m unittest discover -s tests/workflows -v
+
       - name: Start isolated test database
         run: |
           docker network create --internal api-cache-ci
