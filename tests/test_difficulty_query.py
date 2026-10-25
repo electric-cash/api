@@ -129,7 +129,7 @@ def test_cold_analyzer_uses_covering_index_without_hint(
     assert stats['totalDocsExamined'] == 0
     assert stats['totalKeysExamined'] > 0
     assert any(node.get('indexName') == 'height_1_difficulty_1' for node in nodes)
-    assert all(node.get('stage') != 'FETCH' for node in nodes)
+    assert all(node.get('stage') not in ('FETCH', 'seek') for node in nodes)
     assert analyzer.mining_difficulty(6, 1, 1024) == expected
     assert len(captured) == 1
 
