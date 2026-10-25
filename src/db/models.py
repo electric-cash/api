@@ -77,5 +77,5 @@ class Block(Document):
     
     meta = {
         'index_background' : True,
-        'indexes' : ['height']
+        'indexes' : ['height', ('height', 'difficulty')]
     }   

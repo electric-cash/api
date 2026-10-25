@@ -170,7 +170,7 @@ def get_transactions_average_volume_query(interval, lower_height, upper_height):
     
 def get_blocks_average_difficulty_query(interval, lower_height, upper_height):
     projection = {
-        'time' : 1,
+        '_id' : 0,
         'height' : 1,
         'difficulty' : 1
     }

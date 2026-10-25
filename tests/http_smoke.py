@@ -47,8 +47,12 @@ def main():
     if database.list_collection_names():
         raise RuntimeError('Smoke test database must be empty')
     try:
-        database.block.insert_one({'_id': 'block-10', 'height': 10, 'time': 1,
-                                   'difficulty': 1, 'insert_time': 1, 'update_time': 1})
+        database.block.insert_many([
+            {'_id': 'block-{}'.format(height), 'height': height, 'time': height,
+             'difficulty': height, 'insert_time': 1, 'update_time': 1,
+             'tx': [{'hash': 'synthetic-' + 'x' * 8192}]}
+            for height in range(1, 11)
+        ])
         database.address.insert_one({'_id': 'address-one', 'balance': 7,
                                      'txs': [], 'insert_time': 1, 'update_time': 1})
         database.cache_state.insert_one({'_id': 'blockchain', 'generation': 'smoke',
@@ -75,11 +79,29 @@ def main():
 
         aggregates = database.system.profile.count_documents({'command.aggregate': 'address'})
         assert aggregates == 2, aggregates
+        expected_difficulty = [
+            {'_id': 1, 'lower_height': 1, 'upper_height': 7, 'avg_difficulty': 4.0},
+            {'_id': 8, 'lower_height': 8, 'upper_height': 10, 'avg_difficulty': 9.0},
+        ]
+        for _ in range(2):
+            response = requests.get(api + '/miningdifficulty?period=week', timeout=5)
+            assert response.status_code == 200, response.status_code
+            assert response.json() == expected_difficulty
+        difficulty_aggregates = [
+            entry for entry in database.system.profile.find({'command.aggregate': 'block'})
+            if any('$bucket' in stage for stage in entry['command'].get('pipeline', []))
+        ]
+        assert len(difficulty_aggregates) == 1, len(difficulty_aggregates)
+        difficulty_stats = difficulty_aggregates[0]
+        assert difficulty_stats['docsExamined'] == 0, difficulty_stats
+        assert difficulty_stats['keysExamined'] > 0, difficulty_stats
         database.address.update_one({'_id': 'address-one'}, {'$set': {'balance': 9}})
         database.cache_state.update_one({'_id': 'blockchain'}, {'$set': {'generation': 'next'}})
         assert requests.get(api + '/status', timeout=5).json()['total_coin_supply'] == 9.0
         assert database.system.profile.count_documents({'command.aggregate': 'address'}) == 3
-        print(json.dumps({'http_requests': 21, 'initial_address_aggregations': aggregates,
+        print(json.dumps({'http_requests': 23, 'initial_address_aggregations': aggregates,
+                          'difficulty_aggregations': len(difficulty_aggregates),
+                          'difficulty_docs_examined': difficulty_stats['docsExamined'],
                           'generation_change_observed': True, 'result': 'passed'}))
     finally:
         database.command('profile', 0)
