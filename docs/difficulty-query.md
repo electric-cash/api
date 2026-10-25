@@ -39,6 +39,37 @@ indexes, data types, free disk, memory and load first. Pre-build and verify the
 exact index in an approved, observed maintenance step before replacing the
 application image. Do not substitute a unique, sparse or partial index.
 
+Before starting any candidate API or daemon process, run this metadata-only
+check from the candidate image with its approved database environment:
+
+```bash
+python -m difficulty_index_check \
+  --expected-database "$EXPECTED_DB_NAME" \
+  --expected-host "$EXPECTED_DB_HOST"
+```
+
+Supply the expected target independently from the approved rollout record, not
+by copying the current `DB_NAME`/`DB_URL` blindly. The check uses the normal
+`DB_*` configuration, primary reads, five-second connection/socket/command
+timeouts and no automatic read retries. It lists indexes directly through
+PyMongo, without accessing MongoEngine collections or creating indexes. Use
+a database read-only credential where available; do not put secrets in arguments.
+
+Exit 0 reports `metadata_verified`: both `height_1` and
+`height_1_difficulty_1` exist under their model-declared names, have the expected
+ordered keys and ordinary non-unique options, and are not reported as building.
+An incorrect target, missing collection/index, hidden/partial/sparse/unique index,
+incompatible collation, unfinished build or unreadable metadata stops the check
+with a nonzero exit. A different name with equivalent keys is not accepted:
+the model's automatic index creation must not conflict with another definition.
+Raw driver errors and connection strings are not printed.
+
+This is an operator-run prerequisite, not an automatic startup hook or a lock
+against concurrent index changes. Run it immediately before the controlled image
+replacement and prevent concurrent schema maintenance. Success does not verify
+query plans, application data, backup recovery or production readiness. It never
+builds the missing index or starts an application process for the operator.
+
 The model retains the existing background-index setting. It does not guarantee
 a nonblocking build on every MongoDB version. Account for resource use and brief
 locking; use the target version's supported build/abort procedures.
@@ -46,8 +77,8 @@ locking; use the target version's supported build/abort procedures.
 After creation, inspect an unhinted explain for the actual pipeline and data:
 the presence of the index alone does not prove the planner selected it. Require
 a nonempty indexed range, `totalDocsExamined: 0`, positive keys examined and no
-`FETCH` for the difficulty aggregation. Compare response values, errors,
-latencies and resource use before and after any approved rollout.
+`FETCH` or SBE `seek` stage for the difficulty aggregation. Compare response
+values, errors, latencies and resource use before and after any approved rollout.
 
 The existing [backup and rollout gates](backup-and-rollout.md) still apply to
 the full API/daemon candidate. This query optimization does not repair balances,
