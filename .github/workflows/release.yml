@@ -5,6 +5,17 @@ on:
     branches:
       - master
 
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+concurrency:
+  group: api-image-publication
+  cancel-in-progress: false
+
 env:
   ECR_REPOSITORY: api
   IMAGE_TAG: ${{ github.sha }}
@@ -14,87 +25,75 @@ jobs:
   release:
     name: release
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v2
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0
-          token: ${{ secrets.GH_TOKEN }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Build application image
+        run: |
+          docker build --label "org.opencontainers.image.revision=$IMAGE_TAG" -t "$BUILD_NAME" .
+          docker run --rm --network none --entrypoint python "$BUILD_NAME" -m pip check
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: eu-west-1
+          unset-current-credentials: true
 
       - name: Login to Amazon ECR
         id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - uses: satackey/action-docker-layer-caching@v0.0.11
-        # Ignore the failure of a step and avoid terminating the job.
-        continue-on-error: true
-
-      - name: Python Semantic Release
-        uses: relekang/python-semantic-release@master
-        with:
-          github_token: ${{ secrets.GH_TOKEN }}
-          pypi_token: false
-
-      - name: Pull docker docker image (for layers that we dont have)
-        continue-on-error: true
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: docker pull $ECR_REGISTRY/$ECR_REPOSITORY:latest
-
-      - name: Builder image
-        run: docker build -t $BUILD_NAME .
-
-      - name: Tag, and push image to Amazon ECR
-        env:
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-        run: |
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-1
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_2 }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_2 }}
           aws-region: ap-southeast-1
+          unset-current-credentials: true
 
       - name: Login to Amazon ECR
         id: login-ecr-2
-        uses: aws-actions/amazon-ecr-login@v1
-
-      - name: Tag, and push image to Amazon ECR
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
         env:
-          ECR_REGISTRY: ${{ steps.login-ecr-2.outputs.registry }}
-        run: |
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-2
 
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v1
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_3 }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_3 }}
           aws-region: eu-west-1
+          unset-current-credentials: true
 
       - name: Login to Amazon ECR
         id: login-ecr-3
-        uses: aws-actions/amazon-ecr-login@v1
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2.1.7
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-3
 
-      - name: Tag, and push image to Amazon ECR
+      - name: Publish to first registry
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-1
+        run: bash .github/scripts/publish-image.sh
+
+      - name: Publish to second registry
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr-2.outputs.registry }}
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-2
+        run: bash .github/scripts/publish-image.sh
+
+      - name: Publish to third registry
         env:
           ECR_REGISTRY: ${{ steps.login-ecr-3.outputs.registry }}
-        run: |
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker tag $BUILD_NAME $ECR_REGISTRY/$ECR_REPOSITORY:latest
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
-          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          DOCKER_CONFIG: ${{ runner.temp }}/ecr-3
+        run: bash .github/scripts/publish-image.sh

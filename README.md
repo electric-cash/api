@@ -79,6 +79,9 @@ url = "http://user:password@elcashd:8332"
 ```
 
 # Build and deployment using docker-compose
+Container publication from `master` is documented in [image publication](docs/image-publication.md).
+Publishing an image is separate from deployment and database recovery.
+
 For convenience `run.sh` script was added. It does all necessary steps for building and setting whole environment.
 @TODO: update documentation for local development
 

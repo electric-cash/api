@@ -154,7 +154,8 @@ The pull-request workflow runs these checks and uploads JUnit/coverage reports
 and a candidate-image archive identified by source SHA and MongoDB test version,
 retained for seven days.
 The workflow has read-only repository permissions and does not publish images
-to a registry or deploy them. The existing release workflow is unchanged.
+to a registry or deploy them. See the separate [image publication workflow](image-publication.md)
+for the master-branch registry publication contract and its versioning boundaries.
 
 The separate [isolated recovery drill](recovery-drill.md) exercises actual
 dump/restore and interrupted daemon processes. It does not certify an existing
