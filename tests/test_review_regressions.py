@@ -1,4 +1,5 @@
 from copy import deepcopy
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -151,7 +152,7 @@ def test_daemon_retries_only_classified_rpc_errors(daemon, monkeypatch):
     update = Mock(side_effect=[error_type('RPC unavailable'), RuntimeError('data failure')])
     monkeypatch.setattr(daemon, 'try_to_connect', lambda: None)
     monkeypatch.setattr(daemon, 'update_blockchain', update)
-    monkeypatch.setattr(daemon.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(daemon, 'time', SimpleNamespace(sleep=lambda seconds: None))
     with pytest.raises(RuntimeError, match='data failure'):
         daemon.run()
     assert update.call_count == 2
@@ -224,7 +225,7 @@ def test_rpc_error_during_partial_writes_stops_without_retrying(daemon, monkeypa
     update = Mock(side_effect=[rpc.RPCError('RPC unavailable'), RuntimeError('unexpected retry')])
     monkeypatch.setattr(daemon, 'try_to_connect', lambda: None)
     monkeypatch.setattr(daemon, 'update_blockchain', update)
-    monkeypatch.setattr(daemon.time, 'sleep', lambda seconds: None)
+    monkeypatch.setattr(daemon, 'time', SimpleNamespace(sleep=lambda seconds: None))
     with pytest.raises(RuntimeError, match='unfinished'):
         daemon.run()
     assert update.call_count == 1

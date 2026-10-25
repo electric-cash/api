@@ -164,11 +164,20 @@ def update_blockchain(should_stop=None):
         return
 
     generation = None
+
+    def before_write():
+        nonlocal generation
+        if generation is None:
+            generation = query_cache.begin_update()
+
     last_written_height = None
     previous_hash = tip.hash if tip is not None else None
     chunk_size = end_block_number - start_block_number
     iterations = chunk_size // MAX_CHUNK_SIZE + 1
     backup = False
+    retry_error = None
+    if start_block_number > 0 and not should_stop():
+        check_reorg(min(chunk_size, MAX_CHUNK_SIZE))
     
     try:
         for i in range(iterations):
@@ -185,17 +194,19 @@ def update_blockchain(should_stop=None):
                 logging.debug("Processing block = {}".format(idx))
 #                 backup = backup or idx % BACKUP_INTERVAL == 0
                 
-                block = get_block(idx)
-                if (block.get('height') != idx or
-                        (previous_hash is not None and block.get('previousblockhash') != previous_hash)):
-                    query_cache.invalidate()
-                    raise RuntimeError('Fetched block does not extend the canonical chain; verified recovery required')
                 n_utxos = {}
                 d_utxos = {}
-
-                if generation is None:
-                    generation = query_cache.begin_update()
-                insert_block(block, n_utxos, d_utxos)
+                try:
+                    block = get_block(idx)
+                    if (block.get('height') != idx or
+                            (previous_hash is not None and block.get('previousblockhash') != previous_hash)):
+                        query_cache.invalidate()
+                        raise RuntimeError('Fetched block does not extend the canonical chain; verified recovery required')
+                    insert_block(block, n_utxos, d_utxos, before_write=before_write)
+                except RPCError as error:
+                    # RPC failures precede this block's writes; finish the verified prefix.
+                    retry_error = error
+                    break
                 last_written_height = idx
                 processed += 1
                 previous_hash = block['hash']
@@ -205,11 +216,8 @@ def update_blockchain(should_stop=None):
                 
             if processed == 0 and should_stop():
                 break
-            if start_block_number > 0:
-                check_reorg(min(chunk_size, MAX_CHUNK_SIZE))
-            
             update_addresses(new_utxos, del_utxos)
-            if should_stop():
+            if should_stop() or retry_error is not None:
                 break
 
 #         if backup:
@@ -219,10 +227,14 @@ def update_blockchain(should_stop=None):
         raise
     
     if generation is None:
+        if retry_error is not None:
+            raise retry_error
         return
     query_cache.mark_writes_complete(generation, last_written_height, previous_hash)
     _verify_completed_update(last_written_height, previous_hash)
     query_cache.complete_update(generation)
+    if retry_error is not None:
+        raise retry_error
     if not should_stop():
         _reexecute_queries()
 
@@ -232,7 +244,7 @@ def init_cleanup():
 
 def try_to_connect():
     try:
-        connect(host=get_db_uri())
+        connect(host=get_db_uri(primary_reads=True))
     except Exception as e:
         logging.error(e)
         raise

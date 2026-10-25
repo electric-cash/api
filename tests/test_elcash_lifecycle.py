@@ -116,7 +116,8 @@ def test_all_chunks_finish_address_updates_before_publication(daemon, monkeypatc
     addresses_updated = []
     original_complete = query_cache.complete_update
 
-    def insert(block, new, deleted):
+    def insert(block, new, deleted, before_write):
+        before_write()
         assert query_cache.get_generation() is None
         height = int(block['hash'].split('-')[1])
         Block(hash=block['hash'], previousblockhash='block-' + str(height - 1),
@@ -170,11 +171,16 @@ def test_begin_update_failure_prevents_block_mutation(daemon, monkeypatch):
         'hash': 'block-11', 'height': height, 'previousblockhash': 'block-10',
     })
     monkeypatch.setattr(query_cache, 'begin_update', Mock(side_effect=OperationFailure('state write failed')))
-    insert = Mock()
+    mutation = Mock()
+
+    def insert(block, new, deleted, before_write):
+        before_write()
+        mutation()
+
     monkeypatch.setattr(daemon, 'insert_block', insert)
     with pytest.raises(OperationFailure, match='state write failed'):
         daemon.update_blockchain()
-    insert.assert_not_called()
+    mutation.assert_not_called()
     assert Block.objects.count() == 1
 
 
@@ -207,7 +213,8 @@ def test_next_chunk_must_extend_previously_fetched_block_before_insert(daemon, m
         return {'hash': 'block-' + str(height), 'height': height,
                 'previousblockhash': 'block-10' if height == 11 else 'other-block-11'}
 
-    def insert(block, new, deleted):
+    def insert(block, new, deleted, before_write):
+        before_write()
         inserted.append(block['height'])
         Block(hash=block['hash'], height=block['height'], previousblockhash=block['previousblockhash'],
               time=1, difficulty=1, insert_time=1, update_time=1).save()

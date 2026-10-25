@@ -35,7 +35,7 @@ def validate_environment(values):
         values.get('RPC_HOST') == 'api-cache-test-rpc' and
         values.get('RPC_PORT', '8332') == '8332' and
         not any(values.get(key) for key in (
-            'DB_USERNAME', 'DB_PASSWORD', 'DB_URI_PARAMS')))
+            'DB_USERNAME', 'DB_PASSWORD', 'DB_URI_PARAMS', 'RPC_USER', 'RPC_PASSWORD')))
     if not allowed:
         raise RuntimeError('Recovery drill requires isolated local services and fixture databases')
     return tuple(match.group(1) + '_recovery_' + role for role in ('source', 'restored'))

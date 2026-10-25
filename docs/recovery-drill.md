@@ -64,7 +64,7 @@ bash tests/recovery_smoke.sh
 
 The script refuses an external Docker network, extra fixture-container network
 attachments, published ports, a reused archive, or an invalid database prefix. The Python worker
-also rejects real database/RPC hostnames, database credentials, URI options, and
+also rejects real database/RPC hostnames, nonempty database or RPC credentials, URI options, and
 names outside its fixture pair. A reused, nonempty source or restore database
 is rejected; choose a fresh prefix rather than deleting unknown data.
 
