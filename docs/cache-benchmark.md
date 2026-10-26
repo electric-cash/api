@@ -102,9 +102,9 @@ requires identical dependency records and response results across workers. Sourc
 digests use sorted relative POSIX paths, NUL separators and SHA-256 of each `.py`
 file, normalizing CRLF to LF. Symlinks and compiled artifacts (`.pyc`, `.pyo`,
 `.so`, `.pyd`) are rejected: `-B` prevents bytecode writes, not reads.
-Source validation is
-repeated after the run. This adapts `version_transition_smoke.py` fingerprinting
-to Windows checkout versus Linux image line endings; hashes are not Git SHAs.
+Source validation is repeated after the run. Both this runner and
+`version_transition_smoke.py` use `source_fingerprint.py`, including the same
+Windows checkout versus Linux image line-ending rules; hashes are not Git SHAs.
 
 ## Operator commands (PowerShell)
 

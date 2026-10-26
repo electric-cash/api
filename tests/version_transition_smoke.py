@@ -2,7 +2,6 @@
 import argparse
 from contextlib import contextmanager
 from decimal import Decimal
-import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -18,6 +17,7 @@ from pymongo import MongoClient
 from fake_rpc import BLOCKS, ORIGIN, SPEND, transaction
 from recovery_smoke import application_digest, require, validate_environment, verify_fixture
 from service_smoke import service, wait_for
+from source_fingerprint import source_digest
 
 
 LEGACY_ROOT = Path('/legacy')
@@ -125,17 +125,8 @@ def check_status(url, height, supply):
 
 
 def validate_sources():
-    result = {}
-    for label, root in [('legacy', LEGACY_ROOT), ('candidate', CANDIDATE_ROOT)]:
-        files = sorted(root.rglob('*.py'))
-        require(files and (root / 'daemon.py').is_file() and (root / 'api.py').is_file(),
-                'Both reviewed source trees must be mounted')
-        digest = hashlib.sha256()
-        for path in files:
-            require(not path.is_symlink(), 'Symlink in source tree')
-            digest.update(str(path.relative_to(root)).encode() + b'\0')
-            digest.update(hashlib.sha256(path.read_bytes()).digest())
-        result[label] = digest.hexdigest()
+    result = {label: source_digest(root)
+              for label, root in [('legacy', LEGACY_ROOT), ('candidate', CANDIDATE_ROOT)]}
     require(result['legacy'] != result['candidate'], 'Source trees must differ')
     return result
 

@@ -89,6 +89,13 @@ Each successful scenario emits JSON including source-tree fingerprints and
 `result: "passed"`. A failed assertion exits nonzero. The shell cleanup removes
 only the MongoDB container and network created by this invocation.
 
+Fingerprints use the same helper as the cache benchmark: relative POSIX paths,
+SHA-256 of each `.py` file, and CRLF normalized to LF. Symlinked roots, files and
+directories and compiled artifacts (`.pyc`, `.pyo`, `.so`, `.pyd`) are rejected
+before connecting to MongoDB. Use clean source-only checkouts. These digests
+are not Git commit IDs; older drill output without line-ending normalization
+may differ for the same source revision.
+
 ## Evidence limits
 
 - Ingestion calls the actual `update_analyzer()` and `update_blockchain()` from

@@ -86,6 +86,65 @@ def test_symlinked_source_is_rejected(sources):
         smoke.validate_sources()
 
 
+@pytest.mark.parametrize('root_index', [0, 1])
+def test_symlinked_package_directory_is_rejected(sources, tmp_path, root_index):
+    package = tmp_path / 'external_package'
+    package.mkdir()
+    (package / '__init__.py').write_text('# external code', encoding='ascii')
+    (sources[root_index] / 'db').symlink_to(package, target_is_directory=True)
+    with pytest.raises(RuntimeError, match='Symlink'):
+        smoke.validate_sources()
+
+
+def test_symlinked_source_root_is_rejected(sources, tmp_path, monkeypatch):
+    alias = tmp_path / 'legacy_alias'
+    alias.symlink_to(sources[0], target_is_directory=True)
+    monkeypatch.setattr(smoke, 'LEGACY_ROOT', alias)
+    with pytest.raises(RuntimeError, match='Symlink'):
+        smoke.validate_sources()
+
+
+@pytest.mark.parametrize('relative', [
+    'api.pyc', 'api.pyo', 'api.so', 'api.pyd',
+    '__pycache__/api.cpython-37.pyc', 'db/module.PYC',
+])
+@pytest.mark.parametrize('root_index', [0, 1])
+def test_compiled_artifacts_are_rejected(sources, root_index, relative):
+    path = sources[root_index] / relative
+    path.parent.mkdir(exist_ok=True)
+    path.write_bytes(b'not-source')
+    with pytest.raises(RuntimeError, match='Compiled'):
+        smoke.validate_sources()
+
+
+def test_source_fingerprints_match_benchmark_and_ignore_line_endings(sources):
+    from cache_benchmark import source_digest
+
+    for root in sources:
+        (root / 'api.py').write_bytes(b'# api\n# second line\n')
+    expected = smoke.validate_sources()
+    for label, root in zip(('legacy', 'candidate'), sources):
+        assert expected[label] == source_digest(root)
+        (root / 'api.py').write_bytes(b'# api\r\n# second line\r\n')
+    assert smoke.validate_sources() == expected
+
+
+def test_line_endings_do_not_make_identical_sources_distinct(sources):
+    (sources[0] / 'daemon.py').write_bytes(b'# same\n')
+    (sources[1] / 'daemon.py').write_bytes(b'# same\r\n')
+    with pytest.raises(RuntimeError, match='must differ'):
+        smoke.validate_sources()
+
+
+def test_unsafe_source_rejected_before_database_connection(environment, sources, monkeypatch):
+    (sources[0] / 'api.so').write_bytes(b'not-source')
+    connection = MagicMock(side_effect=AssertionError('Must not connect'))
+    monkeypatch.setattr(smoke, 'MongoClient', connection)
+    with pytest.raises(RuntimeError, match='Compiled'):
+        smoke.main()
+    connection.assert_not_called()
+
+
 def test_rejects_nonempty_database_before_starting_workers(environment, sources, monkeypatch):
     client = MagicMock()
     client.__getitem__.return_value.list_collection_names.return_value = ['address']

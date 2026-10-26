@@ -19,6 +19,7 @@ from unittest.mock import patch
 import uuid
 
 from fake_rpc import BLOCKS
+from source_fingerprint import source_digest
 
 
 ROOTS = {'legacy': Path('/legacy'), 'candidate': Path('/app')}
@@ -53,23 +54,6 @@ def validate_environment(values, source=None):
 
 def validate_limits(requests, concurrency):
     require(1 <= requests <= 100 and 1 <= concurrency <= 4, 'Benchmark bounds exceeded')
-
-
-def source_digest(root):
-    # Same path/content framing as version_transition_smoke, with portable LF bytes.
-    require((root / 'api.py').is_file() and (root / 'daemon.py').is_file(),
-            'Both reviewed source trees must be mounted')
-    paths = list(root.rglob('*'))
-    require(not root.is_symlink() and not any(path.is_symlink() for path in paths),
-            'Symlink in source tree')
-    require(not any(path.suffix.lower() in ('.pyc', '.pyo', '.so', '.pyd') for path in paths),
-            'Compiled artifacts are not covered by the source fingerprint')
-    digest = hashlib.sha256()
-    for path in sorted((p for p in paths if p.suffix == '.py'),
-                       key=lambda p: p.relative_to(root).as_posix()):
-        digest.update(path.relative_to(root).as_posix().encode() + b'\0')
-        digest.update(hashlib.sha256(path.read_bytes().replace(b'\r\n', b'\n')).digest())
-    return digest.hexdigest()
 
 
 def validate_sources(candidate_sha256):
