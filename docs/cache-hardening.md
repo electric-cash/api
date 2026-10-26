@@ -254,6 +254,11 @@ daemon does not invalidate generations and could leave cached results stale.
 The previous code ignores the new collections but also lacks these safety
 guards. Do not roll back merely to bypass a known data-integrity failure.
 
+The [isolated version-transition drill](version-transition-drill.md) exercises
+this ordering with legacy and candidate source code. Its negative control
+deliberately omits invalidation to detect stale results on synthetic data; that
+sequence is not a supported deployment procedure.
+
 ## Remaining availability and shutdown limits
 
 RPC input proofs are resolved before a block's first write. If a classified RPC
