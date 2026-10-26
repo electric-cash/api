@@ -109,29 +109,36 @@ to Windows checkout versus Linux image line endings; hashes are not Git SHAs.
 ## Operator commands (PowerShell)
 
 No build, fixture creation, shared-fixture stop, cloud, cluster, commit, or push
-command is part of this procedure. Existing fixture/image names below identify
-the operator-prepared `919dba7` validation environment.
+command is part of this procedure. Build images as described in
+[Run the tests](cache-hardening.md#run-the-tests), then prepare an isolated
+fixture network with `api-cache-test-mongo` before running the benchmark.
+The network and image names below are operator-selected local resources;
+do not use a remote Docker context or a network connected to live services.
 
 ```powershell
 $worktree = (Get-Location).Path
 $legacy = 'C:\path\to\verified-legacy-checkout\src' # Operator-selected source path.
+$network = 'api-cache-test-network'
+$testImage = 'api-cache-tests:local'
+$apiImage = 'api-cache-candidate:local'
 # Verify this independently when preparing a new image/source snapshot.
+# This value identifies the candidate src tree at revision 919dba7.
 $candidateSha = 'b445f23724dd12bc9365bd647fc099d4dc31dd113c66fd2d993ade54ca17737b'
 $name = 'api_cache_http_bench_' + [guid]::NewGuid().ToString('N').Substring(0, 12)
 
 # Unit tests only, no DB dependency or repo-wide Mongo autouse fixtures.
-docker run --rm --network gw-fresh-runtime-20261026 `
+docker run --rm --network none --memory 512m --cpus 1 `
   --mount "type=bind,source=$worktree,target=/work,readonly" `
-  elcash-tests:fresh-20261026-919dba7 `
+  $testImage `
   --noconftest tests/test_cache_benchmark.py -q
 
 # Execute both actual source trees in the fresh candidate application image.
-docker run --rm --network gw-fresh-runtime-20261026 `
+docker run --rm --network $network --memory 512m --cpus 1 `
   --mount "type=bind,source=$worktree\tests,target=/bench,readonly" `
   --mount "type=bind,source=$legacy,target=/legacy,readonly" `
   -e DB_URL=api-cache-test-mongo -e "DB_NAME=$name" `
   -e RPC_HOST=api-cache-test-rpc `
-  elcash-api:fresh-20261026-919dba7 `
+  $apiImage `
   python -B /bench/cache_benchmark.py coordinator `
   --candidate-sha256 $candidateSha --requests 20 --concurrency 4
 ```
