@@ -1,1 +1,2 @@
 tests/*.sh text eol=lf
+.github/scripts/*.sh text eol=lf
