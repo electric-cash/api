@@ -5,6 +5,7 @@ from db import query_cache
 from db.models import Address, Block, RequestCache, UTXO
 from mongoengine import Document
 from mongoengine.errors import NotUniqueError
+from mongoengine.queryset.base import BaseQuerySet
 from pymongo.errors import OperationFailure
 from urllib.parse import parse_qsl
 from blockchain.rpc import RPCError, get_block, get_block_count, get_raw_transaction
@@ -208,7 +209,10 @@ def insert_block(block, new_utxos, del_utxos, before_write=None):
         raise
 
 def execute_query(pipeline, collection, **kwargs):
-    if not collection or collection == None:
+    # QuerySet truthiness otherwise fetches a whole block/address document.
+    probe = (collection.all_fields().only('pk').as_pymongo()
+             if isinstance(collection, BaseQuerySet) else collection)
+    if not probe:
         if 'default' in kwargs:
             return kwargs['default']
         raise Exception('execute_query failed: performed on empty collection without default value specified')
