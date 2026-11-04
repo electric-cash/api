@@ -13,6 +13,8 @@ ROOT = Path(__file__).resolve().parents[2]
 SHA = 'a' * 40
 DIGEST = 'sha256:' + 'b' * 64
 IMAGE = 'example.invalid/api'
+RELEASE_ACCOUNTS = ('628422242680', '869187294824')
+PUBLISH_ROLE = 'github-actions-api-publisher'
 
 
 class ReleaseWorkflowTests(unittest.TestCase):
@@ -28,9 +30,11 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_only_master_pushes_can_publish(self):
         self.assertEqual(self.workflow['on'], {'push': {'branches': ['master']}})
 
-    def test_job_token_is_read_only_and_not_persisted(self):
+    def test_oidc_permission_is_job_scoped_and_checkout_token_not_persisted(self):
         self.assertEqual(self.workflow.get('permissions'), {'contents': 'read'})
-        self.assertNotIn('permissions', self.job)
+        self.assertEqual(self.job.get('permissions'), {
+            'contents': 'read', 'id-token': 'write',
+        })
         checkout = next(step for step in self.steps
                         if step.get('uses', '').startswith('actions/checkout@'))
         self.assertEqual(checkout['with'].get('ref'), '${{ github.sha }}')
@@ -56,25 +60,54 @@ class ReleaseWorkflowTests(unittest.TestCase):
         self.assertLess(index, first_aws)
         self.assertEqual(self.workflow['env']['IMAGE_TAG'], '${{ github.sha }}')
 
-    def test_all_existing_registry_destinations_are_preserved(self):
+    def test_publication_targets_the_two_configured_accounts_via_oidc(self):
         credentials = [step for step in self.steps
                        if step.get('uses', '').startswith(
                            'aws-actions/configure-aws-credentials@')]
-        self.assertEqual(len(credentials), 3)
-        for step, suffix, region in zip(credentials, ('', '_2', '_3'),
-                                        ('eu-west-1', 'ap-southeast-1', 'eu-west-1')):
-            self.assertEqual(step['with']['aws-access-key-id'],
-                             '${{ secrets.AWS_ACCESS_KEY_ID%s }}' % suffix)
-            self.assertEqual(step['with']['aws-secret-access-key'],
-                             '${{ secrets.AWS_SECRET_ACCESS_KEY%s }}' % suffix)
-            self.assertEqual(step['with']['aws-region'], region)
+        self.assertEqual(len(credentials), 2)
+        for step, account in zip(credentials, RELEASE_ACCOUNTS):
+            self.assertEqual(step['with'], {
+                'role-to-assume': 'arn:aws:iam::%s:role/%s' % (account, PUBLISH_ROLE),
+                'allowed-account-ids': account,
+                'audience': 'sts.amazonaws.com',
+                'aws-region': 'eu-west-1',
+                'role-duration-seconds': '900',
+                'role-session-name': 'api-release-${{ github.run_id }}',
+                'unset-current-credentials': 'true',
+                'retry-max-attempts': '3',
+            })
+        serialized = json.dumps(self.workflow)
+        for removed in ('AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY',
+                        'ap-southeast-1', '525933512102'):
+            self.assertNotIn(removed, serialized)
         publishes = [step for step in self.steps if step.get('run') ==
                      'bash .github/scripts/publish-image.sh']
-        self.assertEqual(len(publishes), 3)
-        for step, login in zip(publishes, ('login-ecr', 'login-ecr-2', 'login-ecr-3')):
+        self.assertEqual(len(publishes), 2)
+        for step, login in zip(publishes, ('login-ecr-prod', 'login-ecr-stage')):
             self.assertEqual(step['env']['ECR_REGISTRY'],
                              '${{ steps.%s.outputs.registry }}' % login)
             self.assertNotIn('continue-on-error', step)
+
+    def test_release_has_no_environment_or_authentication_fallback(self):
+        self.assertNotIn('environment', self.job)
+        self.assertNotIn('continue-on-error', self.job)
+        for step in self.steps:
+            self.assertNotIn('if', step)
+            self.assertNotIn('continue-on-error', step)
+            if step.get('uses', '').startswith('aws-actions/'):
+                for name in ('aws-access-key-id', 'aws-secret-access-key',
+                             'aws-session-token', 'role-chaining',
+                             'use-existing-credentials', 'force-skip-oidc'):
+                    self.assertNotIn(name, step.get('with', {}))
+
+    def test_other_workflows_cannot_request_oidc_tokens(self):
+        for path in (ROOT / '.github/workflows').glob('*.yml'):
+            if path.name == 'release.yml':
+                continue
+            workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+            self.assertNotIn('id-token', workflow.get('permissions', {}))
+            for job in workflow['jobs'].values():
+                self.assertNotIn('id-token', job.get('permissions', {}))
 
     def test_publication_is_serial_and_bounded(self):
         self.assertEqual(self.workflow.get('concurrency'), {
@@ -85,7 +118,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
     def test_all_credentials_and_logins_are_checked_before_any_push(self):
         logins = [(i, step) for i, step in enumerate(self.steps)
                   if step.get('uses', '').startswith('aws-actions/amazon-ecr-login@')]
-        self.assertEqual(len(logins), 3)
+        self.assertEqual(len(logins), 2)
         for index, step in logins:
             credentials = self.steps[index - 1]
             self.assertTrue(credentials.get('uses', '').startswith(
@@ -94,7 +127,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             publish = next(item for item in self.steps if item.get('env', {}).get(
                 'ECR_REGISTRY') == '${{ steps.%s.outputs.registry }}' % step['id'])
             self.assertEqual(step['env']['DOCKER_CONFIG'], publish['env']['DOCKER_CONFIG'])
-        self.assertEqual(len({step['env']['DOCKER_CONFIG'] for _, step in logins}), 3)
+        self.assertEqual(len({step['env']['DOCKER_CONFIG'] for _, step in logins}), 2)
         first_publish = next(i for i, step in enumerate(self.steps)
                              if step.get('run') == 'bash .github/scripts/publish-image.sh')
         self.assertLess(logins[-1][0], first_publish)
