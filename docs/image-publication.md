@@ -13,23 +13,30 @@ merged master commit again. Test the actual published artifact before rollout.
 
 ## Registry contract
 
-The three existing destinations remain in order:
+The two configured destinations remain in order:
 
-| Credential secrets | Region |
-| --- | --- |
-| `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `eu-west-1` |
-| `AWS_ACCESS_KEY_ID_2`, `AWS_SECRET_ACCESS_KEY_2` | `ap-southeast-1` |
-| `AWS_ACCESS_KEY_ID_3`, `AWS_SECRET_ACCESS_KEY_3` | `eu-west-1` |
+| Account | Role | Region |
+| --- | --- | --- |
+| Production: `628422242680` | `github-actions-api-publisher` | `eu-west-1` |
+| Staging: `869187294824` | `github-actions-api-publisher` | `eu-west-1` |
 
-Each credential pair selects its default private ECR registry. The workflow
-does not provision repositories or grant IAM access. Existing credentials must
-still permit ECR login, pushing and reading manifests (`ecr:BatchGetImage`) in
-the `api` repository; their validity can
-only be established by a successful authorized publication.
+Each step assumes its account's role directly using GitHub OIDC, verifies the
+returned account ID, and requests a 15-minute session. Both steps explicitly
+clear credentials left by preceding steps. No static AWS key secrets, role
+chaining, or fallback credentials are used. The historical Singapore mirror
+is no longer a publication target. This does not delete its resources, images
+or credentials, or establish that no external consumers remain. Review the
+destination change before activating this workflow.
 
-All three logins complete before the first push; this detects authentication
+The workflow does not provision repositories, OIDC providers or IAM roles.
+These must exist before activation; see the IAM contract below. Human CLI
+profiles and an interactive `aws login` session do not authenticate Actions.
+Do not give the workflow the operator's administrative role or copy temporary
+operator credentials into GitHub Secrets.
+
+Both logins complete before the first push; this detects authentication
 failures early but does not prove repository-level read/write permissions.
-Each credential slot uses a separate temporary Docker configuration, so logins
+Each account uses a separate temporary Docker configuration, so logins
 cannot overwrite one another even if two slots resolve to the same registry.
 Each destination receives the full commit-SHA tag followed by `latest` for
 backward compatibility. Docker Buildx reads each digest from the registry;
@@ -46,6 +53,59 @@ may replace a pending run and does not promise FIFO ordering. Do not treat
 alias backwards; review the source SHA before any rerun. Rebuilding a SHA is
 not a guarantee of identical bytes (the base image is not digest-pinned).
 Record and verify the registry digest before deployment.
+
+## IAM contract
+
+In each target account, provision an OIDC identity provider for
+`https://token.actions.githubusercontent.com`, with the client ID
+`sts.amazonaws.com`, and the dedicated role named above. Limit its trust to
+`sts:AssumeRoleWithWebIdentity` from that same account's provider, with exact
+`StringEquals` conditions:
+
+```json
+{
+  "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
+  "token.actions.githubusercontent.com:sub": "repo:electric-cash/api:ref:refs/heads/master"
+}
+```
+
+This repository currently uses the default, non-immutable subject format.
+Check `GET /repos/electric-cash/api/actions/oidc/customization/sub` before
+provisioning or changing trust. An environment-based or immutable-ID subject
+requires an intentional trust-policy update, not a wildcard workaround.
+No PR, arbitrary branch or tag subject should be allowed.
+
+Grant only `ecr:GetAuthorizationToken` on `*`, and the following actions on
+`arn:aws:ecr:eu-west-1:ACCOUNT_ID:repository/api`, substituting the role's own
+account ID:
+
+- `ecr:BatchCheckLayerAvailability`
+- `ecr:InitiateLayerUpload`
+- `ecr:UploadLayerPart`
+- `ecr:CompleteLayerUpload`
+- `ecr:PutImage`
+- `ecr:BatchGetImage`
+- `ecr:GetDownloadUrlForLayer`
+
+These cover publication and registry-manifest/config reads. They do not grant
+repository creation/deletion, infrastructure deployment, IAM administration
+or database access. An IAM simulation and local tests are not proof of a
+successful federated session or push. Confirm those in an authorized release
+and retain its account, source SHA and digest receipts.
+
+Only the release job requests `id-token: write`; other workflows retain their
+existing permissions. This permission applies to the whole job, including
+steps before credential configuration. Exact branch trust is not a restriction
+to one workflow file: protect `master` and review workflow changes, especially
+`pull_request_target` workflows. Never execute untrusted PR code with release
+permissions. Existing branch protections must not be relaxed for this repair.
+
+Existing static secrets are no longer read by this workflow. Audit their other
+consumers before separately revoking or deleting them. Reverting to the old
+workflow would restore its dependency on those credentials, not repair them.
+
+References: [GitHub OIDC in AWS](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-aws)
+and [ECR push permissions](https://docs.aws.amazon.com/AmazonECR/latest/userguide/image-push-iam.html).
 
 ## Versioning and deployment boundaries
 
