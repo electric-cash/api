@@ -11,6 +11,16 @@ unchanged. Transaction-volume queries, cache generation handling, ingestion
 and application-data recovery are outside this change. The pipeline forms part
 of the v2 cache key, so changed queries do not reuse entries from the old pipeline.
 
+For integral heights and positive integral intervals with at least two bucket
+boundaries, where the height span fits signed int64, the query uses arithmetic
+grouping instead of a large `$bucket`
+boundary list. The final group sort preserves ascending bucket IDs. In
+particular, it retains the legacy extension of the last regular bucket by one
+height and the separate default bucket; it does not rebalance the chart.
+Nonintegral parameters, overflowing height spans and unsupported short ranges retain the previous
+pipeline or builder error. Stored block heights are expected to be integers,
+as declared by the block model.
+
 ## Validation
 
 `tests/test_difficulty_query.py` uses isolated synthetic blocks containing wide
@@ -29,6 +39,15 @@ prove query semantics and a plan on their fixtures, not production CPU savings.
 The query still scans the index entries in the requested height range; an
 all-history request is not constant-time. Concurrent cold misses may still
 duplicate computation.
+
+`tests/test_difficulty_bucket_cost.py` additionally compares arithmetic grouping
+with the previous `$bucket` pipeline using real MongoDB. It covers exact and
+default boundaries, offset ranges, missing blocks, ignored nonnumeric
+difficulties, integer heights beyond double-precision accuracy, legacy fallback
+errors and operation without the compound index. The valid integral pipeline
+has fixed expression size rather than one boundary per output group. Run both
+difficulty test files together for focused regression coverage. No timing
+threshold in the synthetic suite is a production performance guarantee.
 
 ## Deployment gate
 

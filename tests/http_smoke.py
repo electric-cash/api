@@ -89,7 +89,8 @@ def main():
             assert response.json() == expected_difficulty
         difficulty_aggregates = [
             entry for entry in database.system.profile.find({'command.aggregate': 'block'})
-            if any('$bucket' in stage for stage in entry['command'].get('pipeline', []))
+            if any(stage.get('$group', {}).get('avg_difficulty') == {'$avg': '$difficulty'}
+                   for stage in entry['command'].get('pipeline', []))
         ]
         assert len(difficulty_aggregates) == 1, len(difficulty_aggregates)
         difficulty_stats = difficulty_aggregates[0]

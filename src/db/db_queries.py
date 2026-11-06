@@ -177,16 +177,37 @@ def get_blocks_average_difficulty_query(interval, lower_height, upper_height):
     boundaries = [lower_height + i * interval for i in range(int((upper_height - lower_height) / interval) + 1)]
     boundaries[-1] += 1
     pipeline = get_blocks_in_range_query(lower_height, upper_height, projection)
+    output = {
+        'lower_height': {'$min': '$height'},
+        'upper_height': {'$max': '$height'},
+        'avg_difficulty': {'$avg': '$difficulty'}
+    }
+    if (all(type(value) is int for value in (interval, lower_height, upper_height))
+            and interval > 0 and len(boundaries) >= 2
+            and upper_height - lower_height <= 2 ** 63 - 1):
+        # Preserve the extended last bucket and the legacy default bucket.
+        bucket_id = {'$cond': [
+            {'$gte': ['$height', boundaries[-1]]},
+            boundaries[-1],
+            {'$min': [
+                boundaries[-2],
+                {'$subtract': [
+                    '$height',
+                    {'$mod': [{'$subtract': ['$height', lower_height]}, interval]}
+                ]}
+            ]}
+        ]}
+        pipeline += [
+            {'$group': dict(output, _id=bucket_id)},
+            {'$sort': {'_id': 1}}
+        ]
+        return pipeline
     pipeline += [
         { '$bucket' : {
             'groupBy': '$height',
             'boundaries': boundaries,
             'default': boundaries[-1],
-            'output': {
-                'lower_height' : {'$min' : '$height'},
-                'upper_height' : {'$max' : '$height'},
-                'avg_difficulty': {'$avg': '$difficulty'}
-                }
+            'output': output
             }
         }
     ]
